@@ -36,7 +36,9 @@ with sync_playwright() as p:
         pg.click('.seg button[data-v="studio"]'); pg.wait_for_timeout(300); report['bg_studio'] = save('photo-5-studio-backdrop.jpg')
         pg.click('.seg button[data-v="none"]'); pg.evaluate('PS.params.portrait.enabled = true')
     if want('relight'):
-        tab('relight'); pg.evaluate("Object.assign(PS_PREMIUM.fx().relight, {enabled:true, x:0.3, y:0.75, intensity:0.8, ambient:0.4})"); pg.mouse.click(150, 260); pg.wait_for_timeout(400)
+        tab('relight'); pg.evaluate("Object.assign(PS_PREMIUM.fx().relight, {enabled:true, x:0.3, y:0.75, intensity:0.8, ambient:0.4})"); pg.mouse.click(150, 260); pg.wait_for_timeout(800)
+        pg.wait_for_function('PS_PREMIUM.stage.depthReady === true || PS_PREMIUM.fx().relight.depth === false', timeout=600000); pg.wait_for_timeout(800)
+        report['depth'] = pg.evaluate('PS_PREMIUM.stage.depthReady')
         shot('ui-relight.png'); report['relight'] = save('photo-5-relight.jpg'); pg.evaluate("PS_PREMIUM.fx().relight.enabled=false")
     if want('retouch'):
         tab('retouch'); pg.evaluate("Object.assign(PS_PREMIUM.fx().retouch, {smooth:0.8, eyes:0.6, teeth:0.6})")
@@ -63,10 +65,13 @@ with sync_playwright() as p:
           ev('pointerdown', 0.07, 0.85); for (let i = 0; i <= 10; i++) ev('pointermove', 0.07 + i * 0.006, 0.85); ev('pointerup', 0.13, 0.85);
           ev('pointerdown', 0.2, 0.84); for (let i = 0; i <= 10; i++) ev('pointermove', 0.2 + i * 0.006, 0.84); ev('pointerup', 0.26, 0.84); }""")
         pg.evaluate("document.querySelector('#panelBody input[type=range]').value=0.12; document.querySelector('#panelBody input[type=range]').dispatchEvent(new Event('input'))")
-        shot('ui-erase-marks.png'); pg.click('#erGo'); pg.wait_for_timeout(3000)
+        shot('ui-erase-marks.png'); pg.click('#erGo'); pg.wait_for_timeout(500); pg.wait_for_selector('#busy.hidden', state='attached', timeout=900000); pg.wait_for_timeout(1500)
+        report['erase_engine'] = pg.evaluate("(async () => (await import('./js/app.js')).getState().lastEraseEngine)()")
         report['erase'] = save('photo-5-erased-plant.jpg')
     if want('restore'):
-        open_photo(f'{FX}/old-photo.jpg'); tab('restore'); pg.click("#rsGo"); pg.wait_for_timeout(5000)
+        open_photo(f'{FX}/old-photo.jpg'); tab('restore'); pg.click("#rsGo"); pg.wait_for_timeout(1500)
+        pg.wait_for_function("(async () => !!(await import('./js/app.js')).getState().lastColorEngine)()", timeout=900000); pg.wait_for_selector('#busy.hidden', state='attached', timeout=600000); pg.wait_for_timeout(1500)
+        report['color_engine'] = pg.evaluate("(async () => (await import('./js/app.js')).getState().lastColorEngine)()")
         report['restore'] = save('old-photo-restored-colourised.jpg'); subprocess.run(['cp', f'{FX}/old-photo.jpg', f'{OUT}/old-photo-before.jpg'])
         pg.evaluate("PS_PREMIUM.fx().restore.colorize=0")
     if want('sky'):

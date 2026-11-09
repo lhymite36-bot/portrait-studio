@@ -5,7 +5,7 @@
 export const FX_DEFAULTS = Object.freeze({
   bg: { mode: 'none', c1: '#2b2f45', c2: '#0b0c12' },
   sky: { enabled: false, preset: 'sunset', amount: 1 },
-  relight: { enabled: false, x: 0.35, y: 0.7, radius: 0.35, intensity: 0.5, warmth: 0.4, ambient: 0.25 },
+  relight: { enabled: false, x: 0.35, y: 0.7, radius: 0.35, intensity: 0.5, warmth: 0.4, ambient: 0.25, depth: true },
   retouch: { smooth: 0, eyes: 0, teeth: 0 },
   restore: { colorize: 0 },
   lut: { id: null, amount: 1 },
@@ -18,7 +18,7 @@ export function fxActive(fx) {
 
 const FS_POST = `#version 300 es
 precision highp float; precision highp sampler3D; in vec2 uv; out vec4 o;
-uniform sampler2D graded, enh, mask, bgTex, skyMask, skyTex, feat, orig; uniform sampler3D lut;
+uniform sampler2D graded, enh, mask, bgTex, skyMask, skyTex, feat, orig, normalTex; uniform sampler3D lut; uniform float depthOn;
 uniform int bgMode; uniform vec3 bg1, bg2; uniform vec2 bgScale; uniform float hasMask;
 uniform float skyAmt, lutAmt, lutN, smoothAmt, eyesAmt, teethAmt, colorize;
 uniform vec2 lightPos; uniform float lightR, lightI, lightWarm, ambient, relightOn, aspect, split;
@@ -55,8 +55,19 @@ void main(){
     vec2 d = (uv - lightPos) * vec2(aspect, 1.0);
     float fall = exp(-dot(d,d) / (2.0*lightR*lightR));
     vec3 lc = mix(vec3(1.0), vec3(1.0,0.8,0.58), lightWarm);
-    c *= 1.0 - ambient*0.6*(1.0-m);
-    c = clamp(c + c*lc*fall*lightI*(0.35+0.65*m) + lc*fall*lightI*0.06*m, 0., 1.);
+    if(depthOn > 0.5){
+      // 3D relight from AI depth: Lambert shading on estimated surface normals.
+      vec4 nd = texture(normalTex, uv); vec3 N = normalize(nd.rgb*2.0-1.0); float near = nd.a;
+      vec3 Ld = normalize(vec3((lightPos - uv) * vec2(aspect, 1.0), 0.25 + lightR));
+      float lam = max(dot(N, Ld), 0.0);
+      float fall2 = exp(-dot(d,d) / (2.0*(lightR*1.8)*(lightR*1.8)));
+      float sub = max(m, smoothstep(0.35, 0.85, near));
+      c *= 1.0 - ambient*0.7*(1.0-sub);
+      c = clamp(c + c*lc*lightI*1.3*lam*fall2*(0.3+0.7*sub) + lc*lightI*0.05*lam*fall2*sub, 0., 1.);
+    } else {
+      c *= 1.0 - ambient*0.6*(1.0-m);
+      c = clamp(c + c*lc*fall*lightI*(0.35+0.65*m) + lc*fall*lightI*0.06*m, 0., 1.);
+    }
   }
   if(skyAmt > 0.0){
     float s = texture(skyMask, uv).r * (1.0 - m);
@@ -82,8 +93,8 @@ export class FxStage {
   constructor(pipe) {
     this.pipe = pipe; const gl = pipe.gl; this.gl = gl;
     this.prog = pipe.program('post', FS_POST);
-    this.tex = { bg: pipe.tex(), skyMask: pipe.tex(), sky: pipe.tex(), feat: pipe.tex() };
-    for (const k of ['skyMask', 'feat']) this.upload(k, blank());
+    this.tex = { bg: pipe.tex(), skyMask: pipe.tex(), sky: pipe.tex(), feat: pipe.tex(), normal: pipe.tex() };
+    for (const k of ['skyMask', 'feat', 'normal']) this.upload(k, blank());
     this.upload('sky', blank()); this.upload('bg', blank());
     this.lutTex = gl.createTexture(); this.lutN = 0;
     gl.bindTexture(gl.TEXTURE_3D, this.lutTex);
@@ -116,7 +127,8 @@ export class FxStage {
       pipe.bind(p, 'graded', 0, t.graded.tex); pipe.bind(p, 'enh', 1, t.enh.tex);
       pipe.bind(p, 'mask', 2, t.maskT ? t.maskT.tex : pipe.maskTex);
       pipe.bind(p, 'bgTex', 3, this.tex.bg); pipe.bind(p, 'skyMask', 4, this.tex.skyMask); pipe.bind(p, 'skyTex', 5, this.tex.sky);
-      pipe.bind(p, 'feat', 6, this.tex.feat); pipe.bind(p, 'orig', 7, t.up.tex);
+      pipe.bind(p, 'feat', 6, this.tex.feat); pipe.bind(p, 'orig', 7, t.up.tex); pipe.bind(p, 'normalTex', 9, this.tex.normal);
+      gl.uniform1f(p.u.depthOn, this.depthReady && fx.relight.depth !== false ? 1 : 0);
       gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_3D, this.lutTex); gl.uniform1i(p.u.lut, 8);
       const mode = { none: 0, transparent: 1, color: 2, studio: 3, image: 4 }[fx.bg.mode] || 0;
       gl.uniform1i(p.u.bgMode, mode); gl.uniform3fv(p.u.bg1, hex(fx.bg.c1)); gl.uniform3fv(p.u.bg2, hex(fx.bg.c2));

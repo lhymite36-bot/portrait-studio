@@ -5,6 +5,7 @@ import { TABS, hooks, renderTabs, renderPanel, slider, toggle, segmented, hint, 
 import { FxStage, fxDefaults, fxActive, parseCube, bakeCube } from './fx.js';
 import { inpaint, dilate, detectScratches, autoLevels, isMostlyGrey, detectSky, drawSky, SKIES, drawOverlays, hasOverlays, STICKERS, FONTS, LEAKS, faceFeatures, featureCanvas } from './tools.js';
 import { segmentImage } from './seg.js';
+import { inpaintAI, colorizeAI, depthNormalsAI, AI_MODELS } from './ai.js';
 import { resolveGrade, gradePixel, defaultParams } from './grade.js';
 import { saveToGallery } from './native.js';
 
@@ -45,7 +46,7 @@ hooks.photoExport.push((src, out) => {
 });
 
 hooks.sourceChanged.push((kind) => {
-  stage.skyReady = false; stage.featReady = false; strokes = []; undoImg = null; S.edit = null;
+  stage.skyReady = false; stage.featReady = false; stage.depthReady = false; strokes = []; undoImg = null; S.edit = null;
   if (kind === 'photo' && fx().sky.enabled) enableSky();
   if (kind === 'photo' && (fx().retouch.eyes > 0 || fx().retouch.teeth > 0)) ensureFeatures();
 });
@@ -96,7 +97,8 @@ async function ensureFeatures() {
 
 function panelRelight(el) {
   const r = fx().relight;
-  toggle(el, 'Soft light', () => r.enabled, (v) => (r.enabled = v));
+  toggle(el, 'Light', () => r.enabled, (v) => { r.enabled = v; if (v && r.depth !== false) ensureDepth(); });
+  toggle(el, '3D light (AI depth, ' + AI_MODELS.depth.mb + ' MB once)', () => r.depth !== false, (v) => { r.depth = v; if (v && r.enabled) ensureDepth(); });
   slider(el, 'Intensity', () => r.intensity, (v) => (r.intensity = v), 0, 1);
   slider(el, 'Size', () => r.radius, (v) => (r.radius = v), 0, 1);
   slider(el, 'Warmth', () => r.warmth, (v) => (r.warmth = v), 0, 1);
@@ -163,10 +165,38 @@ async function applyFill(maskCanvas, label) {
   const m = new Uint8Array(c.width * c.height); for (let i = 0; i < m.length; i++) m[i] = md[i * 4 + 3] > 20 ? 1 : 0;
   saveUndo(); const img = ctx.getImageData(0, 0, c.width, c.height);
   $('busy').classList.remove('hidden'); $('busyText').textContent = label; await new Promise((r) => setTimeout(r, 30));
-  const n = inpaint(img.data, m, c.width, c.height);
+  let n = 0, engine = 'classical';
+  try { const r = await inpaintAI(img.data, m, c.width, c.height, aiProgress); n = r.pixels; engine = r.engine; }
+  catch (e) { console.warn('AI eraser unavailable, using classical fill', e); $('busyText').textContent = label; await new Promise((r) => setTimeout(r, 30)); n = inpaint(img.data, m, c.width, c.height); toast('AI eraser unavailable here (' + (e.message || e).slice(0, 80) + '); used classic fill', 5000); }
   ctx.putImageData(img, 0, 0); $('busy').classList.add('hidden');
-  commitEdit(); return n;
+  S.lastEraseEngine = engine; commitEdit(); return n;
 }
+function aiProgress(p) {
+  const t = $('busyText'); if (!t) return;
+  if (p.stage === 'download') t.textContent = `Downloading ${p.model} (${p.mb} MB, once) ${Math.round(p.f * 100)}%`;
+  else if (p.stage === 'load') t.textContent = `Loading ${p.model}…`;
+  else t.textContent = `${p.model} working… (can take a minute)`;
+}
+const busyOn = (txt) => { $('busy').classList.remove('hidden'); $('busyText').textContent = txt; return new Promise((r) => setTimeout(r, 30)); };
+const busyOff = () => $('busy').classList.add('hidden');
+async function aiColorize() {
+  const c = editCanvas(); saveUndo(); await busyOn('Colourising…');
+  try {
+    const r = await colorizeAI(c, aiProgress); c.getContext('2d').drawImage(r.canvas, 0, 0); fx().restore.colorize = 0; S.lastColorEngine = r.engine;
+    busyOff(); persist(); commitEdit(); renderPanel(); toast('Colourised with AI (DDColor)'); return true;
+  } catch (e) {
+    console.warn('AI colourise unavailable', e); busyOff(); fx().restore.colorize = 0.7; S.lastColorEngine = 'classical'; persist(); onParamChange(); renderPanel();
+    toast('AI colourise unavailable here (' + (e.message || e).slice(0, 80) + '); used basic tint', 5000); return false;
+  }
+}
+async function ensureDepth() {
+  if (stage.depthReady || S.kind !== 'photo' || depthBusy) return;
+  depthBusy = true; await busyOn('3D light: reading depth…');
+  try { const src = S.edit || S.bitmap; const r = await depthNormalsAI(src, aiProgress); stage.upload('normal', r.canvas); stage.depthReady = true; S.lastDepthEngine = r.engine; }
+  catch (e) { console.warn('depth unavailable', e); fx().relight.depth = false; toast('3D light unavailable here; using soft light', 4000); }
+  depthBusy = false; busyOff(); requestRender();
+}
+let depthBusy = false;
 function panelErase(el) {
   if (!needPhoto(el)) return;
   slider(el, 'Brush size', () => brush, (v) => (brush = v), 0.01, 0.15, 0.005, (v) => Math.round(v * 100));
@@ -181,14 +211,14 @@ function panelErase(el) {
   };
   row.querySelector('#erClear').onclick = () => { strokes = []; requestRender(); };
   row.querySelector('#erUndo').onclick = undo;
-  hint(el, 'Paint over people or objects, then tap Erase. Best for small and medium objects on simple backgrounds.');
+  hint(el, 'Paint over people or objects, then tap Erase. Uses the LaMa AI eraser (' + AI_MODELS.lama.mb + ' MB download once); falls back to MI-GAN, then a classic fill, only if it crashes.');
 }
 function undo() { if (!undoImg) { toast('Nothing to undo'); return; } const c = editCanvas(); c.getContext('2d').putImageData(undoImg, 0, 0); undoImg = null; commitEdit(); toast('Undone'); }
 
 function panelRestore(el) {
   if (!needPhoto(el)) return;
   const row = document.createElement('div'); row.className = 'btnrow';
-  row.innerHTML = '<button class="btn primary" id="rsGo">Restore old photo</button><button class="btn" id="rsUndo">Undo</button>';
+  row.innerHTML = '<button class="btn primary" id="rsGo">Restore old photo</button><button class="btn" id="rsColor">AI colourise</button><button class="btn" id="rsUndo">Undo</button>';
   el.appendChild(row);
   slider(el, 'Colourise', () => fx().restore.colorize, (v) => (fx().restore.colorize = v), 0, 1);
   row.querySelector('#rsGo').onclick = async () => {
@@ -202,13 +232,14 @@ function panelRestore(el) {
     autoLevels(img.data, c.width, c.height, 0.85);
     ctx.putImageData(img, 0, 0); $('busy').classList.add('hidden');
     const e = S.params.enhance; e.denoise = Math.max(e.denoise, 0.55); e.sharpen = Math.max(e.sharpen, 0.45); e.clarity = Math.max(e.clarity, 0.2);
-    if (grey && fx().restore.colorize === 0) fx().restore.colorize = 0.7;
     S.params.portrait.enabled = false; // restoration, not bokeh: turn blur back on in Portrait if wanted
     persist(); commitEdit(); renderPanel();
-    toast(`Restored: ${marked < c.width * c.height * 0.08 ? Math.round(marked) + ' scratch pixels fixed, ' : ''}levels, denoise and sharpen${grey ? ', colourised' : ''}`, 4000);
+    toast(`Restored: ${marked < c.width * c.height * 0.08 ? Math.round(marked) + ' scratch pixels fixed, ' : ''}levels, denoise and sharpen`, 4000);
+    if (grey) await aiColorize();
   };
+  row.querySelector('#rsColor').onclick = aiColorize;
   row.querySelector('#rsUndo').onclick = undo;
-  hint(el, 'Fixes dust and thin scratches, faded contrast and noise. Colourise adds natural tones to black and white photos (basic, not AI).');
+  hint(el, 'Fixes dust and thin scratches, faded contrast and noise. Black and white photos are colourised with AI (DDColor, ' + AI_MODELS.ddcolor.mb + ' MB download once). The slider adds a basic tint instead.');
 }
 
 // ---------- text & stickers ----------
@@ -256,7 +287,7 @@ canvas.addEventListener('pointerdown', async (e) => {
   if (!S.kind || S.split) return;
   const [u, v] = toUV(e);
   if (mode === 'erase' && S.kind === 'photo') { strokes.push({ r: brush / 2, pts: [[u, v]] }); drag = 'erase'; }
-  else if (mode === 'relight') { const r = fx().relight; r.enabled = true; r.x = u; r.y = 1 - v; drag = 'light'; onParamChange(); }
+  else if (mode === 'relight') { const r = fx().relight; r.enabled = true; r.x = u; r.y = 1 - v; drag = 'light'; onParamChange(); if (r.depth !== false) ensureDepth(); }
   else if (mode === 'text') {
     const o = ov(); selected = -1;
     o.items.forEach((it, i) => { const d = Math.hypot((it.x - u) * canvas.width / Math.min(canvas.width, canvas.height), (it.y - v) * canvas.height / Math.min(canvas.width, canvas.height)); if (d < Math.max(0.06, it.size)) selected = i; });
@@ -387,4 +418,4 @@ hooks.beforeExport.push((opts) => {
 });
 
 renderPanel();
-window.PS_PREMIUM = { stage, fx, ov, enableSky, ensureFeatures, runBatch, undo, applyFill, editCanvas };
+window.PS_PREMIUM = { aiColorize, ensureDepth, stage, fx, ov, enableSky, ensureFeatures, runBatch, undo, applyFill, editCanvas };

@@ -58,3 +58,12 @@ test('dsp: pitch shift keeps length, gate attenuates noise, wav, bitrate', () =>
   assert.equal(S.bitrateForSize(8, 64), 872000);
   assert.ok(S.textAnim('typewriter', 0.1, 3, 10).chars < 10);
 });
+
+test('Lab round trip used by the AI colouriser', async () => {
+  const { rgb2lab, lab2rgb } = await import('../../www/js/ai.js');
+  for (const c of [[0.2, 0.5, 0.8], [1, 1, 1], [0, 0, 0], [0.9, 0.3, 0.1]]) {
+    const [L, a, b] = rgb2lab(...c); const r = lab2rgb(L, a, b);
+    r.forEach((v, i) => assert.ok(Math.abs(v - c[i]) < 2e-3, `${c} -> ${r}`));
+  }
+  const [L, a, b] = rgb2lab(0.5, 0.5, 0.5); assert.ok(Math.abs(a) < 0.01 && Math.abs(b) < 0.01 && Math.abs(L - 53.39) < 0.1);
+});

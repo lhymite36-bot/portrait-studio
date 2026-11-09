@@ -173,7 +173,7 @@ export async function exportVideo(opts) {
   const seg = needMask ? new VideoSegmenter(opts.maskKind === 'fast' ? 'fast' : 'quality') : null;
   if (seg) await seg.init();
   const segCanvas = document.createElement('canvas');
-  const segScale = Math.min(1, 512 / Math.max(upW, upH));
+  const segScale = Math.min(1, 768 / Math.max(upW, upH));
   segCanvas.width = Math.max(16, Math.round(upW * segScale)); segCanvas.height = Math.max(16, Math.round(upH * segScale));
   const segCtx = segCanvas.getContext('2d', { willReadFrequently: false });
 

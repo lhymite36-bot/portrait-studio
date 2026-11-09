@@ -330,7 +330,7 @@ function videoExportSheet() {
   stopVideo();
   const info = state.videoInfo;
   const dur = info ? info.duration : video.duration;
-  const opts = state.videoOpts || (state.videoOpts = { res: '720', mask: 'balanced', slowmo: '1' });
+  const opts = state.videoOpts || (state.videoOpts = { res: '1080', mask: 'quality', slowmo: '1' });
   openSheet(`<h2>Export video</h2>
     <div class="hint">${info ? `${info.width}×${info.height} · ${Math.round(info.fps)} fps · ${fmtTime(dur)}` : ''}</div>
     <div id="vxOpts"></div>
@@ -339,7 +339,7 @@ function videoExportSheet() {
     <div class="btnrow" style="margin-top:14px"><button class="btn primary" id="vxGo">Export MP4</button><button class="btn" id="vxClose">Close</button></div>`);
   const o = $('vxOpts');
   segmented(o, [['720', '720p (fast)'], ['1080', '1080p'], ['0', 'Original']], () => opts.res, (v) => (opts.res = v));
-  segmented(o, [['fast', 'Fast mask'], ['balanced', 'Balanced'], ['quality', 'Best (slow)']], () => opts.mask, (v) => (opts.mask = v));
+  segmented(o, [['fast', 'Fast mask'], ['balanced', 'Balanced'], ['quality', 'Best']], () => opts.mask, (v) => (opts.mask = v));
   segmented(o, [['1', 'Normal speed'], ['2', 'Slow-mo 2×'], ['4', 'Slow-mo 4×']], () => opts.slowmo, (v) => (opts.slowmo = v));
   if (hooks.videoExportOptions) hooks.videoExportOptions(o, opts);
   hint(o, 'Keep the app open while exporting. Original sound is kept (normal speed).');

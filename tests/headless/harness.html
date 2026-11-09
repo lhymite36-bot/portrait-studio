@@ -59,7 +59,7 @@ window.T = {
     const info = await demux(file);
     const p = defaultParams(); p.look.id = opts.look || 'teal-orange'; p.portrait.blur = 0.7;
     const prog = [];
-    const r = await exportVideo({ file, params: p, pipeline: pipe, shortSide: opts.shortSide ?? 720, maskKind: opts.mask || 'balanced', slowmo: opts.slowmo || 1, stabilize: opts.stabilize || 0, paramsAt: opts.focusShift ? (t) => { p.portrait.focusSel = 1; p.portrait.focusX = 0.3 + 0.4 * Math.min(1, t / 3); return p; } : null, onProgress: (x) => prog.push(x.done) });
+    const r = await exportVideo({ file, params: p, pipeline: pipe, shortSide: opts.shortSide ?? 720, maskKind: opts.mask || 'quality', slowmo: opts.slowmo || 1, stabilize: opts.stabilize || 0, paramsAt: opts.focusShift ? (t) => { p.portrait.focusSel = 1; p.portrait.focusX = 0.3 + 0.4 * Math.min(1, t / 3); return p; } : null, onProgress: (x) => prog.push(x.done) });
     const buf = new Uint8Array(await r.blob.arrayBuffer());
     let s = ''; for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
     return { b64: btoa(s), width: r.width, height: r.height, frames: r.frames, seconds: r.seconds, audio: r.audio, rotation: info.rotation, fps: info.fps, srcW: info.width, srcH: info.height, progressCount: prog.length, audioNote: r.audioNote };

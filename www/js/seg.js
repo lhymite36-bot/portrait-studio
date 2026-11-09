@@ -201,15 +201,28 @@ export async function segmentImage(source, kind = 'quality', opts = {}) {
 
 // Video frames with temporal smoothing to stop flicker.
 export class VideoSegmenter {
-  constructor(kind = 'fast') { this.kind = kind; this.prev = null; this.clock = 0; }
-  async init() { const h = await engine(this.kind, 'VIDEO'); this.engine = h.eng.id; return h.eng.delegate || 'wasm'; }
+  // union: also run the selfie model and keep the max of both masks. The multiclass model can
+  // drop faces in dark or blurry frames; the selfie model rarely does, so faces stay sharp.
+  constructor(kind = 'fast', union = kind === 'quality') { this.kind = kind; this.union = union; this.prev = null; this.clock = 0; }
+  async init() {
+    const h = await engine(this.kind, 'VIDEO'); this.engine = h.eng.id;
+    if (this.union) { try { const f = await engine('fast', 'VIDEO'); if (f.eng.id === h.eng.id) this.union = false; } catch (e) { this.union = false; } }
+    return h.eng.delegate || 'wasm';
+  }
   async segment(source, tsMs, smooth = 0.45) {
     // MediaPipe needs strictly increasing timestamps across the segmenter's whole life.
     const h = cache[this.kind + ':VIDEO'];
     const base = h ? (h.clock || 0) : 0;
     const ts = Math.max(base + 1, (this.base0 ?? (this.base0 = base)) + tsMs);
-    const m = await run(this.kind, 'VIDEO', fit(source, MAX_SIDE.VIDEO), ts);
+    const img = fit(source, MAX_SIDE.VIDEO);
+    const m = await run(this.kind, 'VIDEO', img, ts);
     const h2 = cache[this.kind + ':VIDEO']; if (h2) h2.clock = ts;
+    if (this.union) {
+      try {
+        const f = await run('fast', 'VIDEO', img, ts);
+        if (f.width === m.width && f.height === m.height) { const a = m.data, b = f.data; for (let i = 0; i < a.length; i++) if (b[i] > a[i]) a[i] = b[i]; }
+      } catch (e) { this.union = false; }
+    }
     if (this.prev && this.prev.length === m.data.length) {
       const a = 1 - smooth, p = this.prev, d = m.data;
       for (let i = 0; i < d.length; i++) d[i] = Math.round(d[i] * a + p[i] * smooth);

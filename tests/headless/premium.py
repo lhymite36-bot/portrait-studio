@@ -18,7 +18,7 @@ with sync_playwright() as p:
     pg = ctx.new_page()
     pg.on('pageerror', lambda e: errors.append(str(e)))
     pg.on('dialog', lambda d: d.accept('Hello Pedro' if d.type == 'prompt' else None))
-    pg.add_init_script('window.PS_FORCE_CPU = true; localStorage.clear()')
+    pg.add_init_script('window.PS_FORCE_CPU = true; localStorage.clear(); window.PS_AI_SKIP = ' + json.dumps(os.environ.get('PS_AI_SKIP', '').split(',') if os.environ.get('PS_AI_SKIP') else []))
     pg.goto('http://127.0.0.1:8767/index.html'); pg.wait_for_function('window.PS_PREMIUM', timeout=30000)
     def open_photo(path):
         pg.set_input_files('#filePhoto', path); pg.wait_for_timeout(300)

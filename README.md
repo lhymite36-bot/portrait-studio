@@ -19,6 +19,9 @@ Backdrop remove/swap (transparent PNG, studio, colour, photo), sky replacement, 
 ## Video Studio (v1.2.0)
 CapCut-style timeline: multi-track editing (trim/split/merge/reorder), transitions, keyframes, speed curves, freeze/reverse, Whisper auto captions, text animations, CC0 music/SFX, beat sync, voice effects, noise reduction, Android TTS, chroma key, PiP with blend modes and shape masks, face zoom, glow outline, auto reframe 16:9→9:16, templates, export up to 4K/60 with file-size control. See docs/release-notes/v1.2.0.md.
 
+## AI models (downloaded on first use, cached)
+LaMa (Apache-2.0) and MI-GAN (MIT) for the eraser, DDColor-tiny (Apache-2.0) for colourise, Depth Anything V2 small (Apache-2.0) for 3D relight. Bundled: MediaPipe selfie models (Apache-2.0) and U²-Net-p (Apache-2.0) for portrait detection.
+
 ## Build
 ```
 npm ci && npm test && npm run sync

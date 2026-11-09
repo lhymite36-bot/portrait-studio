@@ -227,7 +227,7 @@ export async function exportVideo(opts) {
         if (done % every === 0 || lastMaskTs < 0) {
           drawUpright(segCtx, f, d.width, d.height, d.rotation);
           const ms = Math.max(lastMaskTs + 1, Math.round((f.timestamp - tsBase) / 1000));
-          const m = seg.segment(segCanvas, ms, opts.maskSmooth ?? 0.45);
+          const m = await seg.segment(segCanvas, ms, opts.maskSmooth ?? 0.45);
           lastMaskTs = ms;
           pipe.setMask(m.data, m.width, m.height);
         }

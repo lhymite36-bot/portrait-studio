@@ -95,7 +95,7 @@ async function setPhotoMask(bmp) {
     const m = await segmentImage(bmp, 'quality');
     state.mask = m; pipe.setMask(m.data, m.width, m.height);
     if (!m.data.some((v) => v > 128)) toast('No person found; blur strength will apply to the whole photo edges.', 3500);
-  } catch (e) { console.error(e); pipe.hasMask = false; toast('Portrait detection unavailable: ' + e.message, 5000); }
+  } catch (e) { console.error(e); pipe.hasMask = false; toast('Portrait detection failed on this phone. Please report this: ' + e.message, 12000); }
 }
 
 const video = $('video');

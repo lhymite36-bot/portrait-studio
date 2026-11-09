@@ -1,0 +1,10 @@
+{
+  "appId": "com.lhymite.portraitstudio",
+  "appName": "Portrait Studio",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#07080d",
+    "adjustMarginsForEdgeToEdge": "auto"
+  }
+}

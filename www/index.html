@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#07080d">
+<title>Portrait Studio</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <button id="btnOpen" class="pill"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>Open</span></button>
+    <div class="brand"><span class="dot"></span>Portrait<b>Studio</b></div>
+    <button id="btnSave" class="pill primary" disabled><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 19h14"/></svg><span>Save</span></button>
+  </header>
+
+  <main id="stage">
+    <div id="empty" class="empty">
+      <div class="hero-orb"></div>
+      <h1>Make every shot look <em>pro</em></h1>
+      <p>Portrait blur, quality boost and cinematic colour, all on your phone. Works offline.</p>
+      <div class="empty-actions">
+        <button class="big" data-open="photo"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 8"/></svg>Photo</button>
+        <button class="big" data-open="camera"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Camera</button>
+        <button class="big" data-open="video"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg>Video</button>
+      </div>
+    </div>
+    <div id="view" class="view hidden">
+      <canvas id="canvas"></canvas>
+      <div id="splitHandle" class="split hidden"><span></span></div>
+      <div id="busy" class="busy hidden"><div class="spinner"></div><span id="busyText">Finding people…</span></div>
+    </div>
+    <div class="floating">
+      <button id="btnCompare" class="round" title="Hold to see original" disabled><svg viewBox="0 0 24 24"><path d="M12 3v18M5 7h4M5 17h4M15 7h4M15 17h4"/></svg></button>
+      <button id="btnSplit" class="round" title="Before / after slider" disabled><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M12 5v14"/></svg></button>
+      <button id="btnReset" class="round" title="Reset all" disabled><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7M4 4v4h4"/></svg></button>
+    </div>
+    <div id="videoBar" class="videobar hidden">
+      <button id="btnPlay" class="round small"><svg viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z"/></svg></button>
+      <input id="scrub" type="range" min="0" max="1000" value="0">
+      <span id="vtime">0:00</span>
+    </div>
+  </main>
+
+  <section id="panel" class="panel">
+    <div id="panelBody" class="panel-body"></div>
+    <nav id="tabs" class="tabs"></nav>
+  </section>
+</div>
+
+<div id="sheet" class="sheet hidden"><div class="sheet-card" id="sheetCard"></div></div>
+<div id="toast" class="toast hidden"></div>
+
+<input id="filePhoto" type="file" accept="image/*" hidden>
+<input id="fileCamera" type="file" accept="image/*" capture="environment" hidden>
+<input id="fileVideo" type="file" accept="video/*" hidden>
+<video id="video" playsinline muted preload="auto" hidden></video>
+
+<script src="capacitor.js" onerror="void 0"></script>
+<script src="vendor/mp4box.all.min.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

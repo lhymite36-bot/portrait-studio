@@ -1,0 +1,76 @@
+<!doctype html><html><body>
+<canvas id="c"></canvas>
+<script src="../../www/vendor/mp4box.all.min.js"></script>
+<script type="module">
+import { Pipeline } from '../../www/js/gl.js';
+import { segmentImage } from '../../www/js/seg.js';
+import { defaultParams, gradePixel, resolveGrade, LOOKS } from '../../www/js/grade.js';
+import { exportVideo, demux } from '../../www/js/video.js';
+window.PS_FORCE_CPU = true;
+const pipe = new Pipeline(document.getElementById('c'));
+window.T = {
+  async loadImage(url) { const b = await (await fetch(url)).blob(); return createImageBitmap(b); },
+  async photo(url, mods, outName) {
+    const bmp = await this.loadImage(url);
+    const t0 = performance.now();
+    const m = await segmentImage(bmp, 'quality');
+    const tSeg = performance.now() - t0;
+    pipe.setSource(bmp, bmp.width, bmp.height, 0);
+    pipe.setMask(m.data, m.width, m.height);
+    const p = defaultParams();
+    for (const [k, v] of Object.entries(mods || {})) if (p[k]) Object.assign(p[k], v);
+    const t1 = performance.now();
+    pipe.render(p, Math.round(bmp.width * (mods && mods.scale || 1)), Math.round(bmp.height * (mods && mods.scale || 1)), { quality: 'high' });
+    const tRender = performance.now() - t1;
+    const url2 = pipe.canvas.toDataURL('image/jpeg', 0.93);
+    let maskCanvas = document.createElement('canvas'); maskCanvas.width = m.width; maskCanvas.height = m.height;
+    const id = new ImageData(m.width, m.height); for (let i = 0; i < m.data.length; i++) { id.data[i*4]=id.data[i*4+1]=id.data[i*4+2]=m.data[i]; id.data[i*4+3]=255; }
+    maskCanvas.getContext('2d').putImageData(id, 0, 0);
+    return { img: url2, mask: maskCanvas.toDataURL('image/png'), tSeg, tRender, w: pipe.canvas.width, h: pipe.canvas.height, delegate: 'CPU' };
+  },
+  // GPU vs CPU grade parity on a synthetic gradient
+  parity() {
+    const W = 64, H = 64, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const ctx = cv.getContext('2d'); const id = ctx.createImageData(W, H);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const i = (y*W+x)*4; id.data[i]=x*4; id.data[i+1]=y*4; id.data[i+2]=((x+y)*2)&255; id.data[i+3]=255; }
+    ctx.putImageData(id, 0, 0);
+    const results = [];
+    for (const look of LOOKS) {
+      const p = defaultParams(); p.portrait.enabled = false; p.enhance = { sharpen: 0, denoise: 0, clarity: 0, scale: 'orig' };
+      p.look.id = look.id; p.adjust.exposure = 0.3; p.adjust.temperature = 0.4; p.adjust.contrast = 0.1; p.adjust.shadows = 0.2; p.effects.vignette = 0.5; p.effects.fade = 0.1;
+      p.effects.glow = 0; const g = resolveGrade(p); g.glow = 0;
+      // force glow=0 in GPU too
+      const lk = look.look.glow; look.look.glow = 0; 
+      pipe.setSource(cv, W, H, 0); pipe.hasMask = false; pipe.render(p, W, H);
+      look.look.glow = lk;
+      const px = pipe.readPixels(); let maxErr = 0, sumErr = 0;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const si = (y*W+x)*4, gi = ((H-1-y)*W+x)*4;
+        const ref = gradePixel([id.data[si]/255, id.data[si+1]/255, id.data[si+2]/255], g, [(x+0.5)/W, 1-(y+0.5)/H]);
+        for (let c = 0; c < 3; c++) { const e = Math.abs(ref[c]*255 - px[gi+c]); maxErr = Math.max(maxErr, e); sumErr += e; }
+      }
+      results.push({ look: look.id, maxErr, meanErr: sumErr / (W*H*3) });
+    }
+    return results;
+  },
+  async video(url, opts = {}) {
+    const blob = await (await fetch(url)).blob();
+    const file = new File([blob], 'clip.mp4', { type: 'video/mp4' });
+    const info = await demux(file);
+    const p = defaultParams(); p.look.id = opts.look || 'teal-orange'; p.portrait.blur = 0.7;
+    const prog = [];
+    const r = await exportVideo({ file, params: p, pipeline: pipe, shortSide: opts.shortSide ?? 720, maskKind: 'fast', slowmo: opts.slowmo || 1, onProgress: (x) => prog.push(x.done) });
+    const buf = new Uint8Array(await r.blob.arrayBuffer());
+    let s = ''; for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+    return { b64: btoa(s), width: r.width, height: r.height, frames: r.frames, seconds: r.seconds, audio: r.audio, rotation: info.rotation, fps: info.fps, srcW: info.width, srcH: info.height, progressCount: prog.length, audioNote: r.audioNote };
+  },
+  async cancelTest(url) {
+    const blob = await (await fetch(url)).blob();
+    const file = new File([blob], 'clip.mp4');
+    const ac = new AbortController(); const p = defaultParams();
+    setTimeout(() => ac.abort(), 300);
+    try { await exportVideo({ file, params: p, pipeline: pipe, shortSide: 720, signal: ac.signal }); return 'not-cancelled'; } catch (e) { return e.name; }
+  },
+};
+window.READY = true;
+</script></body></html>

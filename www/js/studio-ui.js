@@ -3,6 +3,7 @@ import { hooks, toast, openSheet, closeSheet, slider, toggle, segmented, hint, g
 import * as E from './studio-engine.js';
 import { layoutClips, projectDuration, splitAt, SPEED_CURVES, detectBeats, beatCut, encodeWav, KF_PROPS, evalKeyframes } from './studio-core.js';
 import { saveToGallery, keepAwake } from './native.js';
+import { stash, stashAll } from './stash.js';
 import { formatEta } from './grade.js';
 import { FONTS, STICKERS } from './tools.js';
 
@@ -41,6 +42,7 @@ function openStudio() {
   $('stZoomOut').onclick = () => { PX = Math.max(10, PX / 1.5); refresh(); };
   $('stTimeline').addEventListener('scroll', () => { if (!playing) { T = $('stTimeline').scrollLeft / PX; placeHead(); schedule(); } });
   const tools = [
+    ['🗑', () => doDelete(), 'trash'],
     ['+ Video', () => pick('video/*,image/*', true, async (fs) => { for (const f of fs) await addMedia(f, 'clip'); }), 'hot'],
     ['+ Overlay', () => pick('video/*,image/*', false, (fs) => addMedia(fs[0], 'layer'))],
     ['+ Text', addText], ['+ Sticker', addSticker], ['+ Music', musicSheet], ['+ SFX', sfxSheet], ['+ Voice (TTS)', addTts],
@@ -50,14 +52,21 @@ function openStudio() {
   ];
   $('stTools').innerHTML = tools.map(([l, , c], i) => `<button data-i="${i}" class="${c || ''}">${l}</button>`).join('');
   $('stTools').querySelectorAll('button').forEach((b) => b.onclick = () => tools[+b.dataset.i][1]());
+  $('stTools').querySelector('.trash').setAttribute('aria-label', 'Delete selected');
   refresh();
 }
 
-function pick(accept, multiple, cb) { const i = document.createElement('input'); i.type = 'file'; i.accept = accept; i.multiple = multiple; i.onchange = () => i.files.length && cb([...i.files]); i.click(); }
+function pick(accept, multiple, cb) {
+  const i = document.createElement('input'); i.type = 'file'; i.accept = accept; i.multiple = multiple;
+  // copy every picked file into app storage at once: Android's read grant can expire later
+  i.onchange = async () => { if (!i.files.length) return; toast('Copying into the app…', 8000); let fs; try { fs = await stashAll([...i.files], (f) => toast(`Copying into the app… ${Math.round(f * 100)}%`, 8000)); } catch (e) { toast(e.message, 9000); return; } cb(fs); };
+  i.click();
+}
 
 export async function addMedia(file, where = 'clip') {
   try {
     toast('Adding ' + (file.name || 'media') + '…');
+    file = await stash(file);
     const s = await E.addSource(file);
     if (s.kind === 'audio') { P.audios.push({ id: nid(), srcId: s.id, start: T, dur: Math.min(s.duration, 600), in: 0, volume: 0.8, name: s.name, fade: true }); }
     else if (where === 'layer') { P.layers.push({ id: nid(), srcId: s.id, start: T, dur: s.kind === 'image' ? 3 : Math.min(s.duration, 10), in: 0, x: 0.72, y: 0.25, scale: 0.7, rot: 0, opacity: 1, blend: 'source-over', shape: 'rounded', name: s.name, _slot: P.layers.length }); select('layer', P.layers[P.layers.length - 1].id); }
@@ -84,7 +93,7 @@ function refresh(withProps = true) {
   inner.innerHTML = h;
   inner.querySelectorAll('.blk').forEach(bindBlock);
   const cv = $('stPreview'); const o = E.outputSize(P, 360); if (cv.width !== o.width || cv.height !== o.height) { cv.width = o.width; cv.height = o.height; }
-  tl.scrollLeft = T * PX; placeHead(); if (withProps) renderProps(); schedule();
+  tl.scrollLeft = T * PX; placeHead(); renderSelBar(); const tb = root.querySelector('#stTools .trash'); if (tb) tb.classList.toggle('off', !sel); if (withProps) renderProps(); schedule();
 }
 function placeHead() { const tl = $('stTimeline'); $('stPlayhead').style.left = (tl.scrollLeft + tl.clientWidth / 2) + 'px'; $('stTime').textContent = fmt(T, true); }
 function setTime(t) { T = Math.max(0, t); $('stTimeline').scrollLeft = T * PX; placeHead(); schedule(); }
@@ -101,39 +110,78 @@ function findItem(kind, id) {
 }
 function select(kind, id) { sel = kind ? { kind, id } : null; refresh(); }
 
+// Touch-first block handling: tap = select, long-press = actions menu (delete etc.),
+// drag a selected block = move, drag its edges = trim. Works with finger and mouse.
 function bindBlock(el) {
   const kind = el.dataset.k, id = el.dataset.id;
+  el.addEventListener('contextmenu', (e) => e.preventDefault());
   el.addEventListener('pointerdown', (e) => {
     const handle = e.target.classList.contains('h') ? (e.target.classList.contains('l') ? 'l' : 'r') : null;
-    if (!sel || sel.id !== id) { select(kind, id); return; }
-    const it = findItem(kind, id); if (!it || kind === 'captions') return;
-    e.preventDefault(); e.stopPropagation(); el.setPointerCapture(e.pointerId);
-    const x0 = e.clientX; const snap = JSON.parse(JSON.stringify(it));
-    const src = it.srcId ? E.sources.get(it.srcId) : null;
+    const isSel = !!sel && sel.id === id; const it = findItem(kind, id);
+    const x0 = e.clientX, y0 = e.clientY; let moved = false, dragging = false, long = false;
+    const snap = it ? JSON.parse(JSON.stringify(it)) : null; const src = it && it.srcId ? E.sources.get(it.srcId) : null;
+    const left0 = parseFloat(el.style.left), width0 = parseFloat(el.style.width);
+    const lp = setTimeout(() => { if (!moved) { long = true; if (navigator.vibrate) try { navigator.vibrate(20); } catch (_) { /* no */ } select(kind, id); blockMenu(kind, id); } }, 550);
+    if (isSel && kind !== 'captions') { try { el.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ } }
     const mv = (ev) => {
-      const dt = (ev.clientX - x0) / PX;
+      const dx = ev.clientX - x0, dy = ev.clientY - y0;
+      if (!moved && Math.hypot(dx, dy) > 8) { moved = true; clearTimeout(lp); }
+      if (!moved || !isSel || !it || kind === 'captions') return;
+      dragging = true; ev.preventDefault();
+      const dt = dx / PX;
       if (kind === 'clip') {
         const sp = it.speed || 1;
         if (handle === 'l') it.in = Math.min(snap.out - 0.1, Math.max(0, snap.in + dt * sp));
         else if (handle === 'r') it.out = Math.max(snap.in + 0.1, Math.min(src ? src.duration : 1e9, snap.out + dt * sp));
         if (it.freeze && handle === 'r') it.freeze = Math.max(0.2, snap.freeze + dt);
+        if (handle) { const d = layoutClips([it]).duration; el.style.width = Math.max(8, d * PX) + 'px'; }
       } else {
-        if (handle === 'l') { const ns = Math.max(0, Math.min(snap.start + snap.dur - 0.1, snap.start + dt)); it.dur = snap.dur - (ns - snap.start); it.start = ns; if (it.in != null) it.in = Math.max(0, (snap.in || 0) + (ns - snap.start)); }
+        if (handle === 'l') { const ns = Math.max(0, Math.min(snap.start + snap.dur - 0.1, snap.start + dt)); it.dur = snap.dur - (ns - snap.start); it.start = ns; if (snap.in != null) it.in = Math.max(0, (snap.in || 0) + (ns - snap.start)); }
         else if (handle === 'r') it.dur = Math.max(0.1, snap.dur + dt);
         else it.start = Math.max(0, snap.start + dt);
+        el.style.left = (left0 + (it.start - snap.start) * PX) + 'px'; el.style.width = Math.max(8, it.dur * PX) + 'px';
       }
-      audioDirty = true; refreshSoon();
+      audioDirty = true; schedule();
     };
-    const up = () => { el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', up); refresh(); };
-    el.addEventListener('pointermove', mv); el.addEventListener('pointerup', up);
+    const done = (ev) => {
+      clearTimeout(lp); el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', done); el.removeEventListener('pointercancel', cancel);
+      if (long) return;
+      if (!moved) { select(kind, id); return; }
+      if (dragging) refresh();
+      void ev; void width0;
+    };
+    const cancel = () => { clearTimeout(lp); el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', done); el.removeEventListener('pointercancel', cancel); if (dragging) refresh(); };
+    el.addEventListener('pointermove', mv); el.addEventListener('pointerup', done); el.addEventListener('pointercancel', cancel);
   });
+}
+function blockMenu(kind, id) {
+  const label = { clip: 'Video clip', layer: 'Overlay', text: 'Text', audio: 'Audio', captions: 'Captions' }[kind] || 'Item';
+  openSheet(`<h2>${label}</h2><div class="menu">
+    <button data-a="delete" style="color:#ff6b6b">🗑 Delete</button>
+    ${kind !== 'captions' ? '<button data-a="split">✂ Split at playhead</button><button data-a="dup">⧉ Duplicate</button>' : ''}
+    <button data-a="close">Cancel</button></div>`);
+  $('sheetCard').querySelectorAll('[data-a]').forEach((b) => b.onclick = () => { closeSheet(); sel = { kind, id }; ({ delete: doDelete, split: doSplit, dup: doDuplicate, close: () => {} })[b.dataset.a](); });
+}
+function renderSelBar() {
+  let bar = $('stSel');
+  if (!bar) { bar = document.createElement('div'); bar.id = 'stSel'; $('stTimeline').before(bar); }
+  if (!sel) { bar.innerHTML = ''; bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+  const label = { clip: 'Clip', layer: 'Overlay', text: 'Text', audio: 'Audio', captions: 'Captions' }[sel.kind];
+  bar.innerHTML = `<span class="sl">${label} selected</span>
+    <button id="stDelete" class="danger" aria-label="Delete">🗑 Delete</button>
+    ${sel.kind !== 'captions' ? '<button id="stSelSplit">✂ Split</button><button id="stSelDup">⧉ Copy</button>' : ''}
+    ${sel.kind === 'clip' ? '<button id="stSelL">◀</button><button id="stSelR">▶</button>' : ''}
+    <button id="stSelDone">✓</button>`;
+  const on = (i, f) => { const b = bar.querySelector('#' + i); if (b) b.onclick = f; };
+  on('stDelete', doDelete); on('stSelSplit', doSplit); on('stSelDup', doDuplicate); on('stSelL', () => move(-1)); on('stSelR', () => move(1)); on('stSelDone', () => select(null));
 }
 let rs = 0; function refreshSoon() { if (!rs) rs = requestAnimationFrame(() => { rs = 0; refresh(false); }); }
 
 // ---------- preview ----------
 const S = getState(); const pipe = getPipe();
 let prs = E.newRenderState();
-function renderOpts(preview) { return { pipe, params: S.params, post: hooks.post ? hooks.post() : null, preview, rs: prs, overlayHook: overlay }; }
+function renderOpts(preview, live = false) { return { pipe, params: S.params, post: hooks.post ? hooks.post() : null, preview, live, rs: prs, overlayHook: overlay }; }
 function overlay(ctx, W, H) { if (P.letterbox) { ctx.fillStyle = '#000'; const b = H * 0.11; ctx.fillRect(0, 0, W, b); ctx.fillRect(0, H - b, W, b); } }
 function schedule() { if (rendering) { pendingRender = true; return; } renderPreview(); }
 async function renderPreview() {
@@ -152,12 +200,12 @@ async function play() {
   while (playing) {
     T = (performance.now() - t0) / 1000; if (T >= dur) { T = dur; break; }
     $('stTimeline').scrollLeft = T * PX; placeHead();
-    try { await E.renderFrame(P, T, $('stPreview'), renderOpts(true)); } catch (e) { console.warn(e); }
+    try { await E.renderFrame(P, T, $('stPreview'), renderOpts(true, true)); } catch (e) { console.warn(e); }
     await new Promise((r) => requestAnimationFrame(r));
   }
   stop();
 }
-function stop() { playing = false; if (previewAudio && previewAudio.node) { try { previewAudio.node.stop(); } catch (e) { /* stopped */ } previewAudio.node = null; } if ($('stPlay')) $('stPlay').innerHTML = '<svg viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z"/></svg>'; }
+function stop() { playing = false; E.pauseAll(); if (previewAudio && previewAudio.node) { try { previewAudio.node.stop(); } catch (e) { /* stopped */ } previewAudio.node = null; } if ($('stPlay')) $('stPlay').innerHTML = '<svg viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z"/></svg>'; schedule(); }
 
 // ---------- edit operations ----------
 function doSplit() {
@@ -167,7 +215,7 @@ function doSplit() {
 }
 function selList() { return !sel ? null : sel.kind === 'clip' ? P.clips : sel.kind === 'layer' ? P.layers : sel.kind === 'text' ? P.texts : sel.kind === 'audio' ? P.audios : null; }
 function doDuplicate() { const arr = selList(); if (!arr) { toast('Select something first'); return; } const i = arr.findIndex((x) => x.id === sel.id); const c = { ...JSON.parse(JSON.stringify(arr[i])), id: nid() }; if (sel.kind === 'clip') arr.splice(i + 1, 0, c); else { c.start = arr[i].start + arr[i].dur; arr.push(c); } audioDirty = true; select(sel.kind, c.id); }
-function doDelete() { if (sel && sel.kind === 'captions') { P.captions = null; select(null); return; } const arr = selList(); if (!arr) { toast('Select something first'); return; } const i = arr.findIndex((x) => x.id === sel.id); arr.splice(i, 1); audioDirty = true; select(null); }
+function doDelete() { if (sel && sel.kind === 'captions') { P.captions = null; select(null); toast('Captions deleted'); return; } const arr = selList(); if (!arr) { toast('Tap a clip on the timeline first, then Delete (or long-press the clip)'); return; } const i = arr.findIndex((x) => x.id === sel.id); if (i < 0) { select(null); return; } arr.splice(i, 1); audioDirty = true; if (sel.kind === 'clip' && P.clips.length && P.clips[0].transition) P.clips[0].transition = { type: 'none', dur: P.clips[0].transition.dur }; select(null); toast('Deleted'); }
 function doFreeze() {
   const l = layoutClips(P.clips); const it = l.items.find((x) => T >= x.start && T < x.end); if (!it) { toast('Put the playhead on a clip'); return; }
   const src = it.map(T - it.start); let arr = splitAt(P.clips, T, nid) || P.clips.slice();

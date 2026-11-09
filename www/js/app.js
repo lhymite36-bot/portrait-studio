@@ -1,6 +1,7 @@
 // Portrait Studio UI controller.
 import { Pipeline } from './gl.js';
 import { segmentImage } from './seg.js';
+import { stash, release, cleanup } from './stash.js';
 import { defaultParams, LOOKS, computeOutputSize, formatEta } from './grade.js';
 import { exportVideo, demux } from './video.js';
 import { saveToGallery, keepAwake } from './native.js';
@@ -56,9 +57,16 @@ function renderPreview() {
 document.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openPicker(b.dataset.open)));
 $('btnOpen').addEventListener('click', () => sheetMenu());
 function openPicker(kind) { ({ photo: $('filePhoto'), camera: $('fileCamera'), video: $('fileVideo') })[kind].click(); }
-$('filePhoto').addEventListener('change', (e) => e.target.files[0] && loadPhoto(e.target.files[0]));
-$('fileCamera').addEventListener('change', (e) => e.target.files[0] && loadPhoto(e.target.files[0]));
-$('fileVideo').addEventListener('change', (e) => e.target.files[0] && loadVideo(e.target.files[0]));
+for (const [id, fn] of [['filePhoto', (f) => loadPhoto(f)], ['fileCamera', (f) => loadPhoto(f)], ['fileVideo', (f) => loadVideo(f)]])
+  $(id).addEventListener('change', (e) => { const f = e.target.files[0]; if (f) fn(f).finally(() => { e.target.value = ''; }); });
+cleanup();
+// Copy the picked file into app storage right away (see stash.js). Returns null on failure.
+async function privateCopy(file, what) {
+  if (file.__stashed) return file;
+  busy(true, `Copying ${what} into the app…`);
+  try { return await stash(file, (f) => busy(true, `Copying ${what} into the app… ${Math.round(f * 100)}%`), what); }
+  catch (e) { console.error(e); busy(false); toast(e.message, 9000); return null; }
+}
 
 function sheetMenu() {
   openSheet(`<h2>Open</h2><div class="menu">
@@ -72,7 +80,8 @@ function sheetMenu() {
 }
 
 export async function loadPhoto(file) {
-  stopVideo();
+  file = await privateCopy(file, 'photo'); if (!file) return;
+  stopVideo(); if (state.file && state.file !== file) release(state.file);
   state.kind = 'photo'; state.file = file;
   showView(); busy(true, 'Loading photo…');
   try {
@@ -100,7 +109,8 @@ async function setPhotoMask(bmp) {
 
 const video = $('video');
 async function loadVideo(file) {
-  stopVideo();
+  file = await privateCopy(file, 'video'); if (!file) return;
+  stopVideo(); if (state.file && state.file !== file) release(state.file);
   state.kind = 'video'; state.file = file; showView(); busy(true, 'Reading video…');
   try {
     state.videoInfo = await demux(file).catch((e) => { toast(e.message, 5000); return null; });
@@ -289,9 +299,11 @@ export function renderThumbs() {
 }
 
 // ---------- sheets ----------
-export function openSheet(html) { $('sheetCard').innerHTML = html; $('sheet').classList.remove('hidden'); }
+let sheetOpenedAt = 0;
+export function openSheet(html) { $('sheetCard').innerHTML = html; $('sheet').classList.remove('hidden'); sheetOpenedAt = performance.now(); }
 export function closeSheet() { $('sheet').classList.add('hidden'); }
-$('sheet').addEventListener('click', (e) => { if (e.target === $('sheet') && !exporting) closeSheet(); });
+// Ignore the click that a long-press release produces right after the sheet opened under the finger.
+$('sheet').addEventListener('click', (e) => { if (e.target === $('sheet') && !exporting && performance.now() - sheetOpenedAt > 450) closeSheet(); });
 
 // ---------- save / export ----------
 let exporting = null;

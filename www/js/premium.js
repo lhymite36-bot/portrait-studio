@@ -5,6 +5,7 @@ import { TABS, hooks, renderTabs, renderPanel, slider, toggle, segmented, hint, 
 import { FxStage, fxDefaults, fxActive, parseCube, bakeCube } from './fx.js';
 import { inpaint, dilate, detectScratches, autoLevels, isMostlyGrey, detectSky, drawSky, SKIES, drawOverlays, hasOverlays, STICKERS, FONTS, LEAKS, faceFeatures, featureCanvas } from './tools.js';
 import { segmentImage } from './seg.js';
+import { stash, stashAll } from './stash.js';
 import { inpaintAI, colorizeAI, depthNormalsAI, AI_MODELS } from './ai.js';
 import { resolveGrade, gradePixel, defaultParams } from './grade.js';
 import { saveToGallery } from './native.js';
@@ -118,7 +119,7 @@ function panelBackground(el) {
 }
 function pickBg() {
   const i = document.createElement('input'); i.type = 'file'; i.accept = 'image/*';
-  i.onchange = async () => { if (!i.files[0]) return; const bm = await createImageBitmap(i.files[0]); const c = document.createElement('canvas'); const s = Math.min(1, 2048 / Math.max(bm.width, bm.height)); c.width = Math.round(bm.width * s); c.height = Math.round(bm.height * s); c.getContext('2d').drawImage(bm, 0, 0, c.width, c.height); stage.upload('bg', c); bgLoaded = true; fx().bg.mode = 'image'; persist(); renderPanel(); onParamChange(); };
+  i.onchange = async () => { if (!i.files[0]) return; let f0; try { f0 = await stash(i.files[0]); } catch (e) { toast(e.message, 8000); return; } const bm = await createImageBitmap(f0); const c = document.createElement('canvas'); const s = Math.min(1, 2048 / Math.max(bm.width, bm.height)); c.width = Math.round(bm.width * s); c.height = Math.round(bm.height * s); c.getContext('2d').drawImage(bm, 0, 0, c.width, c.height); stage.upload('bg', c); bgLoaded = true; fx().bg.mode = 'image'; persist(); renderPanel(); onParamChange(); };
   i.click();
 }
 
@@ -129,7 +130,7 @@ function panelSky(el) {
   const chips = document.createElement('div'); chips.className = 'btnrow';
   chips.innerHTML = SKIES.map((k) => `<button class="btn ${s.preset === k.id ? 'primary' : ''}" data-id="${k.id}">${k.name}</button>`).join('') + '<button class="btn" id="skyPick">Your photo…</button>';
   chips.querySelectorAll('[data-id]').forEach((b) => b.onclick = () => { s.preset = b.dataset.id; s.enabled = true; stage.upload('sky', drawSky(s.preset)); enableSky(); persist(); renderPanel(); });
-  chips.querySelector('#skyPick').onclick = () => { const i = document.createElement('input'); i.type = 'file'; i.accept = 'image/*'; i.onchange = async () => { if (!i.files[0]) return; const bm = await createImageBitmap(i.files[0]); const c = document.createElement('canvas'); c.width = 1024; c.height = Math.round(1024 * bm.height / bm.width); c.getContext('2d').drawImage(bm, 0, 0, c.width, c.height); stage.upload('sky', c); s.preset = 'custom'; s.enabled = true; enableSky(true); }; i.click(); };
+  chips.querySelector('#skyPick').onclick = () => { const i = document.createElement('input'); i.type = 'file'; i.accept = 'image/*'; i.onchange = async () => { if (!i.files[0]) return; let f0; try { f0 = await stash(i.files[0]); } catch (e) { toast(e.message, 8000); return; } const bm = await createImageBitmap(f0); const c = document.createElement('canvas'); c.width = 1024; c.height = Math.round(1024 * bm.height / bm.width); c.getContext('2d').drawImage(bm, 0, 0, c.width, c.height); stage.upload('sky', c); s.preset = 'custom'; s.enabled = true; enableSky(true); }; i.click(); };
   el.appendChild(chips);
   slider(el, 'Blend', () => s.amount, (v) => (s.amount = v), 0, 1);
   hint(el, 'Works best on daytime photos with clear open sky at the top.');
@@ -355,7 +356,7 @@ function importLut() {
 hooks.openMenu.push({ id: 'batch', label: 'Batch edit photos', icon: I('<rect x="3" y="7" width="13" height="13" rx="2"/><path d="M7 3h12a2 2 0 0 1 2 2v12"/>'), run: batch });
 function batch() {
   const i = document.createElement('input'); i.type = 'file'; i.accept = 'image/*'; i.multiple = true;
-  i.onchange = () => i.files.length && runBatch([...i.files]);
+  i.onchange = async () => { if (!i.files.length) return; toast('Copying photos into the app…'); let fs; try { fs = await stashAll([...i.files]); } catch (e) { toast(e.message, 9000); return; } runBatch(fs); };
   i.click();
 }
 async function runBatch(files) {

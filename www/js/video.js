@@ -331,3 +331,76 @@ export class Stabilizer {
   }
 }
 
+
+// ---------- random-access decoded frames (Video Studio preview + export) ----------
+// Decodes with WebCodecs straight from the app's private copy of the file, so it does not
+// depend on the <video> element (which can stay blank in some Android WebViews when seeking
+// a paused video). Sequential playback is cheap; jumps restart from the previous keyframe.
+export class FrameSource {
+  static async open(file) {
+    if (!('VideoDecoder' in globalThis)) throw new Error('no WebCodecs');
+    const d = await demux(file);
+    const cfg = { codec: d.codec, codedWidth: d.width, codedHeight: d.height, description: videoDescription(d.vtrak), optimizeForLatency: true };
+    const sup = await VideoDecoder.isConfigSupported(cfg).catch(() => ({ supported: false }));
+    if (!sup.supported) throw new Error('codec not supported: ' + d.codec);
+    return new FrameSource(file, d, cfg);
+  }
+  constructor(file, d, cfg) {
+    this.file = file; this.d = d; this.cfg = cfg; this.ts = d.timescale;
+    this.samples = d.samples; // decode order
+    const swap = d.rotation === 90 || d.rotation === 270;
+    this.width = swap ? d.height : d.width; this.height = swap ? d.width : d.height;
+    this.canvas = document.createElement('canvas'); this.canvas.width = this.width; this.canvas.height = this.height;
+    this.ctx = this.canvas.getContext('2d');
+    this.frameDur = 1e6 / (d.fps || 30);
+    this.q = []; this.cur = null; this.dec = null; this.next = 0; this.maxFed = -1; this.ended = false; this.reader = new SampleReader(file); this.err = null;
+    this.firstPts = Math.min(...d.samples.slice(0, 32).map((s) => s.cts)) / this.ts * 1e6;
+  }
+  makeDecoder() {
+    if (this.dec) { try { this.dec.close(); } catch (e) { /* closed */ } }
+    this.q.forEach((f) => f.close()); this.q = [];
+    this.err = null;
+    this.dec = new VideoDecoder({ output: (f) => { this.q.push(f); this.q.sort((a, b) => a.timestamp - b.timestamp); if (this.wake) { this.wake(); this.wake = null; } }, error: (e) => { this.err = e; if (this.wake) { this.wake(); this.wake = null; } } });
+    this.dec.configure(this.cfg); this.ended = false;
+  }
+  seekIndex(T) { // decode-order index of the keyframe at or before presentation time T (us)
+    let k = 0;
+    for (let i = 0; i < this.samples.length; i++) { const s = this.samples[i]; if (s.cts / this.ts * 1e6 > T + 1) break; if (s.is_sync) k = i; }
+    return k;
+  }
+  async feed() {
+    const s = this.samples[this.next++];
+    const data = await this.reader.get(s);
+    this.dec.decode(new EncodedVideoChunk({ type: s.is_sync ? 'key' : 'delta', timestamp: Math.round(s.cts / this.ts * 1e6), duration: Math.round(s.duration / this.ts * 1e6), data }));
+    this.maxFed = Math.max(this.maxFed, s.cts / this.ts * 1e6);
+  }
+  wait(ms) { return new Promise((r) => { const t = setTimeout(r, ms); this.wake = () => { clearTimeout(t); r(); }; }); }
+  // Returns an upright canvas with the frame shown at time t (seconds).
+  async frameAt(t) {
+    const T = Math.max(this.firstPts, t * 1e6);
+    const curTs = this.cur ? this.cur.timestamp : -Infinity;
+    if (!this.dec || this.err || T < curTs - 1 || T > Math.max(this.maxFed, curTs) + 1.5e6) {
+      this.makeDecoder(); this.next = this.seekIndex(T); this.maxFed = -1;
+      if (this.cur) { this.cur.close(); this.cur = null; }
+    }
+    const deadline = performance.now() + 8000;
+    for (;;) {
+      if (this.err) throw this.err;
+      let best = null;
+      while (this.q.length && this.q[0].timestamp <= T + this.frameDur * 0.5) { if (best) best.close(); best = this.q.shift(); }
+      if (best) { if (this.cur) this.cur.close(); this.cur = best; }
+      if (this.q.length || (this.ended && !this.dec.decodeQueueSize)) break;
+      if (performance.now() > deadline) throw new Error('decoder stalled');
+      if (this.next < this.samples.length) {
+        await this.feed();
+        if (this.dec.decodeQueueSize > 6) await this.wait(10);
+      } else if (!this.ended) { await this.dec.flush().catch((e) => { this.err = e; }); this.ended = true; }
+      else await this.wait(10);
+    }
+    if (!this.cur) { if (this.q.length) { this.cur = this.q.shift(); } else throw new Error('no frame'); }
+    drawUpright(this.ctx, this.cur, this.width, this.height, this.d.rotation);
+    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    return this.canvas;
+  }
+  close() { try { if (this.dec) this.dec.close(); } catch (e) { /* closed */ } this.q.forEach((f) => f.close()); this.q = []; if (this.cur) this.cur.close(); this.cur = null; }
+}

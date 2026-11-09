@@ -5,7 +5,7 @@
 import { Muxer, ArrayBufferTarget } from '../vendor/mp4-muxer.mjs';
 import { layoutClips, activeAt, projectDuration, evalKeyframes, textAnim, groupWords, chunksToWords, pitchShift, denoiseGate, bitrateForSize } from './studio-core.js';
 import { videoBitrate } from './grade.js';
-import { probeEncoder, demux, drawUpright } from './video.js';
+import { probeEncoder, demux, drawUpright, FrameSource } from './video.js';
 import { segmentImage } from './seg.js';
 import { FONTS } from './tools.js';
 
@@ -18,16 +18,23 @@ export async function addSource(file, kind) {
   const s = { id, file, url, kind: kind || (file.type.startsWith('image') ? 'image' : file.type.startsWith('audio') ? 'audio' : 'video'), name: file.name || 'media', els: [] };
   if (s.kind === 'image') { s.bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' }); s.w = s.bitmap.width; s.h = s.bitmap.height; s.duration = 3600; }
   else if (s.kind === 'video') {
-    const el = makeVideo(url); await once(el, 'loadeddata', 15000);
-    s.w = el.videoWidth; s.h = el.videoHeight; s.duration = el.duration; s.els.push(el);
-    // Phones record portrait video as landscape + a rotation flag. If this browser does not
-    // apply the flag when drawing, rotate the frames ourselves.
-    try {
-      const d = await demux(file);
-      if (d.rotation && el.videoWidth === d.width && el.videoHeight === d.height) {
-        s.rotation = d.rotation; if (d.rotation === 90 || d.rotation === 270) { s.w = el.videoHeight; s.h = el.videoWidth; }
-      }
-    } catch (e) { /* not an mp4 / no metadata */ }
+    s.fs = {};
+    if (!globalThis.PS_NO_WC_PREVIEW) {
+      try { const fs = await FrameSource.open(file); await fs.frameAt(0); s.fs[0] = fs; s.w = fs.width; s.h = fs.height; s.duration = fs.d.duration; s.wc = true; }
+      catch (e) { console.warn('WebCodecs frames unavailable for this clip, using <video>', e); s.noWC = true; }
+    } else s.noWC = true;
+    if (!s.wc) {
+      const el = makeVideo(url); await kick(el);
+      s.w = el.videoWidth; s.h = el.videoHeight; s.duration = el.duration; s.els[0] = el;
+      // Phones record portrait video as landscape + a rotation flag. If this browser does not
+      // apply the flag when drawing, rotate the frames ourselves.
+      try {
+        const d = await demux(file);
+        if (d.rotation && el.videoWidth === d.width && el.videoHeight === d.height) {
+          s.rotation = d.rotation; if (d.rotation === 90 || d.rotation === 270) { s.w = el.videoHeight; s.h = el.videoWidth; }
+        }
+      } catch (e) { /* not an mp4 / no metadata */ }
+    }
   } else {
     s.audio = await decodeAudio(file); s.duration = s.audio.duration;
   }
@@ -41,11 +48,37 @@ export function addGeneratedSource(name, audioBuffer) {
 function makeVideo(url) { const v = document.createElement('video'); v.src = url; v.muted = true; v.playsInline = true; v.preload = 'auto'; v.crossOrigin = 'anonymous'; return v; }
 function once(el, ev, ms = 8000) { return new Promise((res, rej) => { const t = setTimeout(() => rej(new Error(ev + ' timeout')), ms); el.addEventListener(ev, () => { clearTimeout(t); res(); }, { once: true }); el.addEventListener('error', () => { clearTimeout(t); rej(new Error('Cannot play this file')); }, { once: true }); }); }
 function element(src, slot) {
-  while (src.els.length <= slot) src.els.push(makeVideo(src.url));
+  if (!src.els[slot]) src.els[slot] = makeVideo(src.url);
   return src.els[slot];
 }
+// Some Android WebViews only decode a <video> after it has played once.
+async function kick(el) {
+  if (el.readyState >= 2) return;
+  const ready = once(el, 'loadeddata', 15000);
+  try { await el.play(); el.pause(); } catch (e) { /* autoplay blocked: wait for data */ }
+  await ready.catch(async (e) => { if (el.readyState < 2) throw e; });
+}
+export const frameDiag = { wc: 0, video: 0, fallbacks: [] };
+// Frame of a video source at time t: WebCodecs decode of the private copy, <video> as fallback.
+async function videoFrame(src, slot, t, live) {
+  if (src.wc && !src.noWC) {
+    try { const fs = src.fs[slot] || (src.fs[slot] = await FrameSource.open(src.file)); const c = await fs.frameAt(t); frameDiag.wc++; return c; }
+    catch (e) { console.warn('WebCodecs frame failed, switching to <video>', e); src.noWC = true; frameDiag.fallbacks.push(String(e.message || e)); Object.values(src.fs).forEach((f) => f.close()); src.fs = {}; }
+  }
+  const el = element(src, slot);
+  if (live) await follow(el, t); else { if (!el.paused) el.pause(); await seek(el, t); }
+  frameDiag.video++; return upright(src, el, slot);
+}
+// While the preview plays, let the <video> play in step with the timeline instead of seeking
+// a paused element every frame (Android WebView often shows nothing for seeks while paused).
+async function follow(el, t) {
+  if (el.readyState < 2) await kick(el);
+  t = Math.max(0, Math.min((el.duration || 0) - 0.001, t));
+  if (Math.abs(el.currentTime - t) > 0.35) { el.currentTime = t; await once(el, 'seeked', 8000).catch(() => {}); }
+  if (el.paused) { try { await el.play(); } catch (e) { /* autoplay blocked: fall back to seeking */ await seek(el, t); } }
+}
 async function seek(el, t) {
-  if (el.readyState < 2) await once(el, 'loadeddata', 15000);
+  if (el.readyState < 2) await kick(el);
   t = Math.max(0, Math.min((el.duration || 0) - 0.001, t));
   if (Math.abs(el.currentTime - t) < 0.0005 && !el.seeking) return;
   el.currentTime = t; await once(el, 'seeked', 8000);
@@ -106,7 +139,7 @@ async function drawClipFrame(ctx, it, T, w, h, p, rs, slot, opts) {
   const c = it.clip, src = sources.get(c.srcId); if (!src) return;
   let img, sw = src.w, sh = src.h;
   if (src.kind === 'image') img = src.bitmap;
-  else { const el = element(src, slot); await seek(el, it.map(T - it.start)); img = upright(src, el, slot); }
+  else img = await videoFrame(src, slot, it.map(T - it.start), opts.live && (it.clip.speed || 1) === 1 && !it.clip.reverse && !it.clip.freeze && (!it.clip.curve || it.clip.curve === 'none'));
   // cover-fit crop window
   const scale = Math.max(w / sw, h / sh);
   let cw = w / scale, ch = h / scale, cx = sw / 2, cy = sh / 2;
@@ -197,7 +230,7 @@ async function drawLayer(ctx, L, T, W, H) {
   const src = sources.get(L.srcId); if (!src) return;
   const t = T - L.start; const k = evalKeyframes(L, t);
   let img = src.bitmap, sw = src.w, sh = src.h;
-  if (src.kind === 'video') { const el = element(src, 2 + ((L._slot || 0) % 2)); await seek(el, (L.in || 0) + (t % Math.max(0.1, src.duration - (L.in || 0)))); img = upright(src, el, 'L' + L.id); }
+  if (src.kind === 'video') img = await videoFrame(src, 'L' + L.id, (L.in || 0) + (t % Math.max(0.1, src.duration - (L.in || 0))), false);
   if (L.chroma) img = chromaKey(img, sw, sh, L.chroma, Math.min(1, 720 / Math.max(sw, sh)));
   const bw = W * 0.5 * k.scale, bh = bw * sh / sw;
   ctx.save(); ctx.globalAlpha = Math.max(0, Math.min(1, k.opacity)); ctx.globalCompositeOperation = L.blend || 'source-over';
@@ -255,7 +288,15 @@ function drawCaptions(ctx, cap, T, W, H) {
  * Renders the whole project at timeline time T into canvas `out` (w x h).
  * opts: { pipe, params, post, preview }
  */
+// Preview renders go to a back buffer and are copied in one go, so the visible canvas never
+// shows the half-drawn (black) state while a frame is still decoding.
 export async function renderFrame(p, T, out, opts = {}) {
+  if (!opts.preview) return renderInto(p, T, out, opts);
+  const bb = scratch.back || (scratch.back = tmp()); if (bb.width !== out.width || bb.height !== out.height) { bb.width = out.width; bb.height = out.height; }
+  await renderInto(p, T, bb, opts);
+  out.getContext('2d').drawImage(bb, 0, 0);
+}
+async function renderInto(p, T, out, opts) {
   const W = out.width, H = out.height; const ctx = out.getContext('2d');
   const rs = opts.rs || (opts.rs = newRenderState());
   const layout = opts.layout || layoutClips(p.clips);
@@ -474,3 +515,6 @@ export async function transcribe(p, onProgress, language) {
   if (!words.length && r.text) words = chunksToWords([{ text: r.text, timestamp: [0, dur] }]);
   return { text: r.text, words };
 }
+
+// Pause every preview <video> (called when playback stops).
+export function pauseAll() { for (const s of sources.values()) for (const el of Object.values(s.els || {})) if (el && !el.paused) el.pause(); }

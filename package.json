@@ -1,6 +1,6 @@
 {
   "name": "portrait-studio",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "Portrait Studio: offline portrait blur, quality boost, effects and colour grading for photos and videos. Android (Capacitor).",
   "license": "MIT",
@@ -16,7 +16,8 @@
     "@capacitor/core": "^7.4.0",
     "@mediapipe/tasks-vision": "0.10.21",
     "mp4-muxer": "^5.2.1",
-    "mp4box": "^0.5.3"
+    "mp4box": "^0.5.3",
+    "onnxruntime-web": "^1.20.1"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.4.0"

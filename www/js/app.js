@@ -109,6 +109,7 @@ async function setPhotoMask(bmp) {
 
 const video = $('video');
 async function loadVideo(file) {
+  if (!exporting) closeSheet();
   file = await privateCopy(file, 'video'); if (!file) return;
   stopVideo(); if (state.file && state.file !== file) release(state.file);
   state.kind = 'video'; state.file = file; showView(); busy(true, 'Reading video…');

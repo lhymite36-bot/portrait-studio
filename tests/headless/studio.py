@@ -27,7 +27,7 @@ with sync_playwright() as p:
     def tool(label): pg.click(f'#stTools button:text-is("{label}")'); pg.wait_for_timeout(300)
     def add_files(label, files):
         with pg.expect_file_chooser() as fc: tool(label)
-        fc.value.set_files(files); pg.wait_for_function(f'PS_STUDIO.P.clips.length + PS_STUDIO.P.layers.length + PS_STUDIO.P.audios.length >= {len(files)}', timeout=30000); pg.wait_for_timeout(800)
+        fc.value.set_files(files); pg.wait_for_function(f'PS_STUDIO.P.clips.length + PS_STUDIO.P.layers.length + PS_STUDIO.P.audios.length >= {len(files)}', timeout=60000); pg.wait_for_timeout(800)
     def export(name, res='720', fps='30', size='0', timeout=900000):
         pg.click('#stExport'); pg.wait_for_timeout(300)
         for v in (res, fps, size): pg.click(f'#exOpts .seg button[data-v="{v}"]')

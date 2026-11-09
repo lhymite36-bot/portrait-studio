@@ -5,7 +5,7 @@
 import { Muxer, ArrayBufferTarget } from '../vendor/mp4-muxer.mjs';
 import { layoutClips, activeAt, projectDuration, evalKeyframes, textAnim, groupWords, chunksToWords, pitchShift, denoiseGate, bitrateForSize } from './studio-core.js';
 import { videoBitrate } from './grade.js';
-import { probeEncoder } from './video.js';
+import { probeEncoder, demux, drawUpright } from './video.js';
 import { segmentImage } from './seg.js';
 import { FONTS } from './tools.js';
 
@@ -20,6 +20,14 @@ export async function addSource(file, kind) {
   else if (s.kind === 'video') {
     const el = makeVideo(url); await once(el, 'loadeddata', 15000);
     s.w = el.videoWidth; s.h = el.videoHeight; s.duration = el.duration; s.els.push(el);
+    // Phones record portrait video as landscape + a rotation flag. If this browser does not
+    // apply the flag when drawing, rotate the frames ourselves.
+    try {
+      const d = await demux(file);
+      if (d.rotation && el.videoWidth === d.width && el.videoHeight === d.height) {
+        s.rotation = d.rotation; if (d.rotation === 90 || d.rotation === 270) { s.w = el.videoHeight; s.h = el.videoWidth; }
+      }
+    } catch (e) { /* not an mp4 / no metadata */ }
   } else {
     s.audio = await decodeAudio(file); s.duration = s.audio.duration;
   }
@@ -51,6 +59,13 @@ export async function sourceAudio(s) {
   if (s.audio !== undefined) return s.audio;
   try { s.audio = await decodeAudio(s.file); } catch (e) { s.audio = null; }
   return s.audio;
+}
+
+function upright(src, el, key) {
+  if (!src.rotation) return el;
+  src.up = src.up || {}; const c = src.up[key] || (src.up[key] = document.createElement('canvas'));
+  if (c.width !== src.w || c.height !== src.h) { c.width = src.w; c.height = src.h; }
+  drawUpright(c.getContext('2d'), el, src.w, src.h, src.rotation); return c;
 }
 
 // ---------- compositor ----------
@@ -91,7 +106,7 @@ async function drawClipFrame(ctx, it, T, w, h, p, rs, slot, opts) {
   const c = it.clip, src = sources.get(c.srcId); if (!src) return;
   let img, sw = src.w, sh = src.h;
   if (src.kind === 'image') img = src.bitmap;
-  else { const el = element(src, slot); await seek(el, it.map(T - it.start)); img = el; }
+  else { const el = element(src, slot); await seek(el, it.map(T - it.start)); img = upright(src, el, slot); }
   // cover-fit crop window
   const scale = Math.max(w / sw, h / sh);
   let cw = w / scale, ch = h / scale, cx = sw / 2, cy = sh / 2;
@@ -182,7 +197,7 @@ async function drawLayer(ctx, L, T, W, H) {
   const src = sources.get(L.srcId); if (!src) return;
   const t = T - L.start; const k = evalKeyframes(L, t);
   let img = src.bitmap, sw = src.w, sh = src.h;
-  if (src.kind === 'video') { const el = element(src, 2 + ((L._slot || 0) % 2)); await seek(el, (L.in || 0) + (t % Math.max(0.1, src.duration - (L.in || 0)))); img = el; }
+  if (src.kind === 'video') { const el = element(src, 2 + ((L._slot || 0) % 2)); await seek(el, (L.in || 0) + (t % Math.max(0.1, src.duration - (L.in || 0)))); img = upright(src, el, 'L' + L.id); }
   if (L.chroma) img = chromaKey(img, sw, sh, L.chroma, Math.min(1, 720 / Math.max(sw, sh)));
   const bw = W * 0.5 * k.scale, bh = bw * sh / sw;
   ctx.save(); ctx.globalAlpha = Math.max(0, Math.min(1, k.opacity)); ctx.globalCompositeOperation = L.blend || 'source-over';

@@ -41,7 +41,7 @@ function openStudio() {
   $('stZoomOut').onclick = () => { PX = Math.max(10, PX / 1.5); refresh(); };
   $('stTimeline').addEventListener('scroll', () => { if (!playing) { T = $('stTimeline').scrollLeft / PX; placeHead(); schedule(); } });
   const tools = [
-    ['+ Video', () => pick('video/*,image/*', true, (fs) => fs.forEach((f) => addMedia(f, 'clip'))), 'hot'],
+    ['+ Video', () => pick('video/*,image/*', true, async (fs) => { for (const f of fs) await addMedia(f, 'clip'); }), 'hot'],
     ['+ Overlay', () => pick('video/*,image/*', false, (fs) => addMedia(fs[0], 'layer'))],
     ['+ Text', addText], ['+ Sticker', addSticker], ['+ Music', musicSheet], ['+ SFX', sfxSheet], ['+ Voice (TTS)', addTts],
     ['Captions', captionsSheet], ['Beat sync', beatSync], ['Templates', templatesSheet],

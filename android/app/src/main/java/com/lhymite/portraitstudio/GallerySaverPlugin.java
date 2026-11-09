@@ -34,16 +34,19 @@ public class GallerySaverPlugin extends Plugin {
         String name = call.getString("name", "PortraitStudio_" + System.currentTimeMillis());
         String mime = call.getString("mime", "image/jpeg");
         boolean video = mime.startsWith("video/");
+        boolean image = mime.startsWith("image/");
         try {
             Sink s = new Sink(); s.mime = mime;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 ContentValues v = new ContentValues();
                 v.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
                 v.put(MediaStore.MediaColumns.MIME_TYPE, mime);
-                v.put(MediaStore.MediaColumns.RELATIVE_PATH, (video ? Environment.DIRECTORY_MOVIES : Environment.DIRECTORY_PICTURES) + "/PortraitStudio");
+                String dir = video ? Environment.DIRECTORY_MOVIES : image ? Environment.DIRECTORY_PICTURES : Environment.DIRECTORY_DOWNLOADS;
+                v.put(MediaStore.MediaColumns.RELATIVE_PATH, dir + "/PortraitStudio");
                 v.put(MediaStore.MediaColumns.IS_PENDING, 1);
                 Uri col = video ? MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                                : MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+                        : image ? MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                        : MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
                 ContentResolver cr = getContext().getContentResolver();
                 s.uri = cr.insert(col, v);
                 if (s.uri == null) throw new Exception("Gallery refused the file");
@@ -87,7 +90,7 @@ public class GallerySaverPlugin extends Plugin {
                 MediaScannerConnection.scanFile(getContext(), new String[]{s.file.getAbsolutePath()}, new String[]{s.mime}, null);
                 r.put("uri", s.file.getAbsolutePath());
             }
-            r.put("where", s.mime.startsWith("video/") ? "Gallery › Movies/PortraitStudio" : "Gallery › Pictures/PortraitStudio");
+            r.put("where", s.mime.startsWith("video/") ? "Gallery › Movies/PortraitStudio" : s.mime.startsWith("image/") ? "Gallery › Pictures/PortraitStudio" : "Downloads/PortraitStudio");
             call.resolve(r);
         } catch (Exception e) { call.reject("Finish failed: " + e.getMessage()); }
     }

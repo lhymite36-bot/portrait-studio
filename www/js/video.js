@@ -5,6 +5,7 @@
 import { Muxer, ArrayBufferTarget } from '../vendor/mp4-muxer.mjs';
 import { computeVideoSize, videoBitrate, avcCodecFor } from './grade.js';
 import { VideoSegmenter } from './seg.js';
+import { estimateShift } from './motion.js';
 
 const MP4Box = () => globalThis.MP4Box;
 
@@ -111,7 +112,7 @@ class SampleReader {
 }
 
 // Draw a frame upright into a small canvas for the segmenter.
-function drawUpright(ctx, frame, w, h, rot) {
+export function drawUpright(ctx, frame, w, h, rot) {
   const c = ctx.canvas;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.translate(c.width / 2, c.height / 2);
@@ -168,13 +169,15 @@ export async function exportVideo(opts) {
   const decoder = new VideoDecoder({ output: (f) => { frames.push(f); if (wake) { wake(); wake = null; } }, error: (e) => { decErr = e; if (wake) wake(); } });
   decoder.configure(decCfg);
 
-  const seg = opts.params.portrait.enabled ? new VideoSegmenter(opts.maskKind || 'fast') : null;
+  const needMask = opts.params.portrait.enabled || (opts.renderOpts && opts.renderOpts.post && opts.renderOpts.post.active);
+  const seg = needMask ? new VideoSegmenter(opts.maskKind === 'fast' ? 'fast' : 'quality') : null;
   if (seg) await seg.init();
   const segCanvas = document.createElement('canvas');
   const segScale = Math.min(1, 512 / Math.max(upW, upH));
   segCanvas.width = Math.max(16, Math.round(upW * segScale)); segCanvas.height = Math.max(16, Math.round(upH * segScale));
   const segCtx = segCanvas.getContext('2d', { willReadFrequently: false });
 
+  const stab = opts.stabilize ? new Stabilizer(d, upW, upH, opts.stabilize) : null;
   const reader = new SampleReader(opts.file);
   const samples = d.samples.filter((s) => s.cts / d.timescale < maxS);
   const total = samples.length;
@@ -195,9 +198,10 @@ export async function exportVideo(opts) {
   };
 
   let outIndex = 0;
+  let outCanvas = pipe.canvas;
   const encodeCanvas = async (ts) => {
     while (encoder.encodeQueueSize > 3) await new Promise((r) => setTimeout(r, 4));
-    const vf = new VideoFrame(pipe.canvas, { timestamp: ts, duration: frameDurUs });
+    const vf = new VideoFrame(outCanvas, { timestamp: ts, duration: frameDurUs });
     encoder.encode(vf, { keyFrame: outIndex % Math.round(fpsIn * 2) === 0 });
     vf.close(); outIndex++;
   };
@@ -216,9 +220,10 @@ export async function exportVideo(opts) {
       frames.sort((a, b) => a.timestamp - b.timestamp);
       const f = frames.shift();
       if (tsBase === null) tsBase = f.timestamp;
+      if (stab) { stab.update(f); pipe.stab = stab.transform(); }
       pipe.setSource(f, f.displayWidth, f.displayHeight, d.rotation);
       if (seg) {
-        const every = opts.maskEvery || 1;
+        const every = opts.maskEvery || (opts.maskKind === 'balanced' ? 3 : 1);
         if (done % every === 0 || lastMaskTs < 0) {
           drawUpright(segCtx, f, d.width, d.height, d.rotation);
           const ms = Math.max(lastMaskTs + 1, Math.round((f.timestamp - tsBase) / 1000));
@@ -230,11 +235,11 @@ export async function exportVideo(opts) {
       const fts = f.timestamp - tsBase;
       f.close();
       const params = opts.paramsAt ? opts.paramsAt(fts / 1e6) : opts.params;
-      pipe.render(params, width, height, { quality: opts.quality || 'low', seed: done % 64 });
-      if (opts.frameHook) opts.frameHook(pipe, fts / 1e6);
+      pipe.render(params, width, height, Object.assign({ quality: opts.quality || 'low', seed: done % 64 }, opts.renderOpts || {}));
+      outCanvas = (opts.frameHook && opts.frameHook(pipe, fts / 1e6, width, height)) || pipe.canvas;
       if (slow > 1) {
         // slow motion: blend between consecutive processed frames
-        const cur = pipe.canvas;
+        const cur = outCanvas;
         if (!prevPixels) { prevPixels = document.createElement('canvas'); prevPixels.width = width; prevPixels.height = height; prevPixels.ctx = prevPixels.getContext('2d'); prevPixels.has = false; }
         if (!exportVideo.blend) { exportVideo.blend = document.createElement('canvas'); }
         const bc = exportVideo.blend; bc.width = width; bc.height = height; const bctx = bc.getContext('2d');
@@ -278,8 +283,47 @@ export async function exportVideo(opts) {
     const blob = new Blob([muxer.target.buffer], { type: 'video/mp4' });
     return { blob, width, height, frames: outIndex, seconds: (performance.now() - t0) / 1000, audio: !!ac, audioNote, sourceFps: fpsIn, rotation: d.rotation, truncated: samples.length < d.samples.length };
   } finally {
+    pipe.stab = null;
     frames.forEach((f) => f.close());
     try { decoder.close(); } catch (e) { /* closed */ }
     try { encoder.close(); } catch (e) { /* closed */ }
   }
 }
+
+// Online video stabiliser: estimates global translation between consecutive
+// frames on a small grey copy (coarse-to-fine block matching), low-pass filters
+// the camera path and shifts + slightly zooms each frame to cancel the shake.
+export class Stabilizer {
+  constructor(d, upW, upH, strength = 1) {
+    this.d = d; this.W = 160; this.H = Math.max(16, Math.round(160 * upH / upW));
+    this.c = document.createElement('canvas'); this.c.width = this.W; this.c.height = this.H;
+    this.ctx = this.c.getContext('2d', { willReadFrequently: true });
+    this.prev = null; this.path = [0, 0]; this.smooth = [0, 0];
+    this.alpha = 0.9 + 0.07 * Math.min(1, strength); this.zoom = 1.08 + 0.04 * Math.min(1, strength);
+    this.maxShift = (this.zoom - 1) / (2 * this.zoom);
+  }
+  gray() {
+    const px = this.ctx.getImageData(0, 0, this.W, this.H).data;
+    const g = new Float32Array(this.W * this.H);
+    for (let i = 0; i < g.length; i++) g[i] = px[i * 4] * 0.3 + px[i * 4 + 1] * 0.59 + px[i * 4 + 2] * 0.11;
+    return g;
+  }
+  update(frame) {
+    drawUpright(this.ctx, frame, 0, 0, this.d.rotation);
+    const g = this.gray();
+    if (this.prev) {
+      const [dx, dy] = estimateShift(this.prev, g, this.W, this.H, 8);
+      this.path[0] += dx; this.path[1] += dy;
+    }
+    this.prev = g;
+    this.smooth[0] = this.alpha * this.smooth[0] + (1 - this.alpha) * this.path[0];
+    this.smooth[1] = this.alpha * this.smooth[1] + (1 - this.alpha) * this.path[1];
+  }
+  transform() {
+    // correction in upright UV units (GL v axis points up, image rows point down)
+    const cx = (this.path[0] - this.smooth[0]) / this.W, cy = (this.path[1] - this.smooth[1]) / this.H;
+    const m = this.maxShift;
+    return { x: Math.max(-m, Math.min(m, cx)), y: Math.max(-m, Math.min(m, -cy)), zoom: this.zoom };
+  }
+}
+

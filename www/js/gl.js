@@ -12,8 +12,8 @@ void main(){ uv = p*0.5+0.5; gl_Position = vec4(p,0.,1.); }`;
 
 const FS_COPY = `#version 300 es
 precision highp float; in vec2 uv; out vec4 o;
-uniform sampler2D t; uniform mat2 rot; uniform float flip;
-void main(){ vec2 q = rot*(uv-0.5)+0.5; if(flip>0.5) q.y = 1.0-q.y; o = texture(t, q); }`;
+uniform sampler2D t; uniform mat2 rot; uniform float flip; uniform vec2 shift; uniform float zoom;
+void main(){ vec2 q = rot*((uv-0.5)/max(zoom,1e-3) + shift)+0.5; if(flip>0.5) q.y = 1.0-q.y; o = texture(t, q); }`;
 
 const FS_BLUR = `#version 300 es
 precision highp float; in vec2 uv; out vec4 o;
@@ -66,17 +66,18 @@ void main(){
 
 const FS_MASK = `#version 300 es
 precision highp float; in vec2 uv; out vec4 o;
-uniform sampler2D mask; uniform sampler2D guide; uniform vec2 maskSize;
+uniform sampler2D mask; uniform sampler2D guide; uniform vec2 maskSize; uniform vec2 mShift; uniform float mZoom;
 void main(){
   vec3 gc = texture(guide, uv).rgb;
+  vec2 muv = (uv-0.5)/max(mZoom,1e-3) + mShift + 0.5; // follow video stabilisation
   vec2 mt = 1.0/maskSize;
-  vec2 base = (floor(uv*maskSize-0.5)+0.5)*mt;
+  vec2 base = (floor(muv*maskSize-0.5)+0.5)*mt;
   float acc=0., ws=0.;
   for(int j=-2;j<=2;j++) for(int i=-2;i<=2;i++){
     vec2 q = base + vec2(float(i),float(j))*mt;
-    vec2 dd = (q-uv)*maskSize;
+    vec2 dd = (q-muv)*maskSize;
     float sw = exp(-dot(dd,dd)/4.5);
-    vec3 gq = textureLod(guide, q, 3.0).rgb;
+    vec3 gq = textureLod(guide, (q-mShift-0.5)*max(mZoom,1e-3)+0.5, 3.0).rgb;
     vec3 df = gq-gc; float rw = exp(-dot(df,df)/(2.0*0.09*0.09));
     float w = sw*rw + 1e-4*sw;
     acc += texture(mask,q).r*w; ws += w;
@@ -111,7 +112,7 @@ void main(){
 const FS_FINAL = `#version 300 es
 precision highp float; in vec2 uv; out vec4 o;
 uniform sampler2D enh, bokeh, mask, blurT, orig; uniform vec2 size;
-uniform float portrait, focus, feather, split, seed;
+uniform float portrait, focus, feather, split, seed, focusX, focusSel;
 uniform float exposure, contrast, highlights, shadows, saturation, vibrance, fade, glow, vignette, grain, monoAmt;
 uniform vec3 wb, lift, gam, gain, splitShadow, splitHigh, mono;
 float shapeM(float m){ float t=0.5-focus*0.4; float f=0.02+feather*0.3; return smoothstep(t-f,t+f,m); }
@@ -143,6 +144,7 @@ void main(){
   vec3 c = e;
   if(portrait > 0.5){
     float m = shapeM(texture(mask, uv).r);
+    if(focusSel > 0.0){ float dx = (uv.x - focusX); m *= mix(1.0, exp(-dx*dx/(2.0*0.11*0.11)), focusSel); }
     c = mix(texture(bokeh, uv).rgb, e, m);
   }
   c = grade(c);
@@ -241,6 +243,8 @@ export class Pipeline {
       const a = (rotation * Math.PI) / 180, c = Math.round(Math.cos(a)), s = Math.round(Math.sin(a));
       gl.uniformMatrix2fv(p.u.rot, false, [c, s, -s, c]);
       gl.uniform1f(p.u.flip, 1);
+      const st = this.stab || { x: 0, y: 0, zoom: 1 };
+      gl.uniform2f(p.u.shift, st.x, st.y); gl.uniform1f(p.u.zoom, st.zoom);
       this.bind(p, 't', 0, this.srcTex);
     });
     this.sourceVersion = (this.sourceVersion || 0) + 1;
@@ -257,6 +261,11 @@ export class Pipeline {
     for (let y = 0; y < h; y++) flipped.set(data.subarray((h - 1 - y) * w, (h - y) * w), y * w);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, w, h, 0, gl.RED, gl.UNSIGNED_BYTE, flipped);
     this.maskW = w; this.maskH = h; this.hasMask = true;
+  }
+
+  maskXform(p) {
+    const st = this.stab || { x: 0, y: 0, zoom: 1 };
+    this.gl.uniform2f(p.u.mShift, st.x, st.y); this.gl.uniform1f(p.u.mZoom, st.zoom);
   }
 
   bind(p, name, unit, tex) {
@@ -287,7 +296,7 @@ export class Pipeline {
     const bs = Math.min(1, 384 / Math.max(this.srcW, this.srcH));
     const bw = Math.max(8, Math.round(this.srcW * bs)), bh = Math.max(8, Math.round(this.srcH * bs));
     const b1 = this.target('blur1', bw, bh), b2 = this.target('blur2', bw, bh);
-    this.draw('copy', b1, (p) => { gl.uniformMatrix2fv(p.u.rot, false, [1, 0, 0, 1]); gl.uniform1f(p.u.flip, 0); this.bind(p, 't', 0, up.tex); });
+    this.draw('copy', b1, (p) => { gl.uniformMatrix2fv(p.u.rot, false, [1, 0, 0, 1]); gl.uniform1f(p.u.flip, 0); gl.uniform2f(p.u.shift, 0, 0); gl.uniform1f(p.u.zoom, 1); this.bind(p, 't', 0, up.tex); });
     for (let i = 0; i < 2; i++) {
       this.draw('blur', b2, (p) => { this.bind(p, 't', 0, b1.tex); gl.uniform2f(p.u.dir, (2 + i) / bw, 0); });
       this.draw('blur', b1, (p) => { this.bind(p, 't', 0, b2.tex); gl.uniform2f(p.u.dir, 0, (2 + i) / bh); });
@@ -309,7 +318,7 @@ export class Pipeline {
       maskT = this.target('mref', mw, mh, { r8: true });
       this.draw('mask', maskT, (p) => {
         this.bind(p, 'mask', 0, this.maskTex); this.bind(p, 'guide', 1, enh.tex);
-        gl.uniform2f(p.u.maskSize, this.maskW, this.maskH);
+        gl.uniform2f(p.u.maskSize, this.maskW, this.maskH); this.maskXform(p);
       });
       // 4. bokeh at half resolution
       bok = this.target('bokeh', mw, mh);
@@ -321,9 +330,18 @@ export class Pipeline {
         gl.uniform1i(p.u.N, opts.quality === 'high' ? 140 : opts.quality === 'low' ? 40 : 80);
       });
     }
+    // optional post stage (premium tools): needs the refined mask even without blur
+    const post = opts.post && opts.post.active ? opts.post : null;
+    if (post && !maskT && this.hasMask) {
+      const mw = Math.max(2, Math.round(outW / 2)), mh = Math.max(2, Math.round(outH / 2));
+      maskT = this.target('mref', mw, mh, { r8: true });
+      this.draw('mask', maskT, (p) => { this.bind(p, 'mask', 0, this.maskTex); this.bind(p, 'guide', 1, enh.tex); gl.uniform2f(p.u.maskSize, this.maskW, this.maskH); this.maskXform(p); });
+    }
+    const graded = post ? this.target('graded', outW, outH) : null;
+    this.lastMaskT = maskT; this.lastEnh = enh;
     // 5. final
     const g = resolveGrade(params);
-    this.draw('final', null, (p) => {
+    this.draw('final', graded, (p) => {
       this.bind(p, 'enh', 0, enh.tex);
       this.bind(p, 'bokeh', 1, bok ? bok.tex : enh.tex);
       this.bind(p, 'mask', 2, maskT ? maskT.tex : this.maskTex);
@@ -332,12 +350,26 @@ export class Pipeline {
       gl.uniform2f(p.u.size, outW, outH);
       gl.uniform1f(p.u.portrait, usePortrait ? 1 : 0);
       gl.uniform1f(p.u.focus, pr.focus); gl.uniform1f(p.u.feather, pr.feather);
+      gl.uniform1f(p.u.focusX, pr.focusX ?? 0.5); gl.uniform1f(p.u.focusSel, pr.focusSel || 0);
       gl.uniform1f(p.u.split, opts.split || 0);
       gl.uniform1f(p.u.seed, opts.seed || 0);
       for (const k of ['exposure', 'contrast', 'highlights', 'shadows', 'saturation', 'vibrance', 'fade', 'glow', 'vignette', 'grain', 'monoAmt']) gl.uniform1f(p.u[k], g[k]);
       gl.uniform3fv(p.u.wb, g.wb); gl.uniform3fv(p.u.lift, g.lift); gl.uniform3fv(p.u.gam, g.gamma); gl.uniform3fv(p.u.gain, g.gain);
       gl.uniform3fv(p.u.splitShadow, g.splitShadow); gl.uniform3fv(p.u.splitHigh, g.splitHigh); gl.uniform3fv(p.u.mono, g.mono);
     });
+    if (post) post.run(this, { graded, enh, maskT, blur: b1, up, outW, outH, split: opts.split || 0 });
+  }
+
+  // Lets add-on stages register their own programs.
+  program(name, fs) {
+    if (this.progs[name]) return this.progs[name];
+    const gl = this.gl; const p = gl.createProgram();
+    gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, VS)); gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, fs));
+    gl.bindAttribLocation(p, 0, 'p'); gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('Link: ' + gl.getProgramInfoLog(p));
+    p.u = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < n; i++) { const info = gl.getActiveUniform(p, i); p.u[info.name] = gl.getUniformLocation(p, info.name); }
+    this.progs[name] = p; return p;
   }
 
   readPixels() {

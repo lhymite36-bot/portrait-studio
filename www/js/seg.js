@@ -38,7 +38,9 @@ function toPersonMask(result, multiclass) {
   const f = m.getAsFloat32Array();
   const out = new Uint8Array(w * h);
   if (multiclass) {
-    for (let i = 0; i < f.length; i++) out[i] = Math.max(0, Math.min(255, Math.round((1 - f[i]) * 255)));
+    // person = hair + body skin + face skin + clothes (excludes background and 'others')
+    const oth = masks.length >= 6 ? masks[5].getAsFloat32Array() : null;
+    for (let i = 0; i < f.length; i++) out[i] = Math.max(0, Math.min(255, Math.round((1 - f[i] - (oth ? oth[i] : 0)) * 255)));
   } else {
     for (let i = 0; i < f.length; i++) out[i] = Math.max(0, Math.min(255, Math.round(f[i] * 255)));
   }

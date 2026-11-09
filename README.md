@@ -13,6 +13,9 @@ Everything runs on the phone: no accounts, no paid APIs, no watermark.
 - Photo import from gallery or camera; saves full resolution JPEG to *Pictures/PortraitStudio*.
 - Video: frame-by-frame export to MP4 (H.264) with the original sound copied untouched, progress bar, ETA and Cancel; 720p / 1080p / original; slow motion 2× / 4× with frame blending. Saved to *Movies/PortraitStudio*.
 
+## Premium tools (v1.1.0)
+Backdrop remove/swap (transparent PNG, studio, colour, photo), sky replacement, skin/eyes/teeth retouch and tap-to-heal, movable relight, object eraser, old-photo restore + colourise, text and stickers, light leaks and film dust, .cube LUT import/export, My looks, batch editing, video stabilise and focus shift. See docs/release-notes/v1.1.0.md.
+
 ## Build
 ```
 npm ci && npm test && npm run sync

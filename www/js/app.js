@@ -48,8 +48,8 @@ function fitPreview(w, h) {
 function renderPreview() {
   if (!state.kind || !pipe) return;
   const split = state.compare ? 1 : state.split;
-  pipe.render(state.params, state.previewW, state.previewH, { quality: state.playing ? 'low' : 'mid', split });
-  hooks.afterRender.forEach((f) => f(pipe, { preview: true }));
+  pipe.render(state.params, state.previewW, state.previewH, { quality: state.playing ? 'low' : 'mid', split, post: hooks.post ? hooks.post() : null });
+  hooks.afterRender.forEach((f) => f(pipe, { preview: true, t: state.kind === 'video' ? video.currentTime : 0 }));
 }
 
 // ---------- open files ----------
@@ -125,7 +125,7 @@ async function videoPreviewFrame(withMask) {
   pipe.setSource(frameCanvas, frameCanvas.width, frameCanvas.height, 0);
   if (withMask && state.params.portrait.enabled && !segBusy) {
     segBusy = true;
-    try { const m = await segmentImage(frameCanvas, 'fast'); pipe.setMask(m.data, m.width, m.height); } catch (e) { console.warn(e); }
+    try { const m = await segmentImage(frameCanvas, state.playing ? 'fast' : 'quality'); pipe.setMask(m.data, m.width, m.height); } catch (e) { console.warn(e); }
     segBusy = false;
   }
   renderPreview();
@@ -144,6 +144,9 @@ function playVideo() {
 function stopVideo() { state.playing = false; try { video.pause(); } catch (e) { /* noop */ } }
 
 function showView() { $('empty').classList.add('hidden'); $('view').classList.remove('hidden'); $('videoBar').classList.toggle('hidden', state.kind !== 'video'); }
+export function getState() { return state; }
+export function getPipe() { return pipe; }
+export { videoPreviewFrame, fitPreview, persist };
 function enableEditing() { ['btnSave', 'btnCompare', 'btnSplit', 'btnReset'].forEach((id) => ($(id).disabled = false)); }
 
 // ---------- compare ----------
@@ -297,20 +300,22 @@ $('btnSave').addEventListener('click', () => (state.kind === 'photo' ? savePhoto
 export async function renderFullPhoto(params = state.params) {
   const bmp = state.bitmap;
   const out = computeOutputSize(bmp.width, bmp.height, params.enhance.scale, pipe.maxTex);
-  pipe.render(params, out.width, out.height, { quality: 'high', split: 0 });
+  pipe.render(params, out.width, out.height, { quality: 'high', split: 0, post: hooks.post ? hooks.post() : null });
   hooks.afterRender.forEach((f) => f(pipe, { preview: false }));
-  hooks.photoExport.forEach((f) => f(pipe));
+  let target = canvas;
+  for (const f of hooks.photoExport) target = f(target, out) || target;
+  out.canvas = target;
   return out;
 }
-export function canvasBlob(type = 'image/jpeg', q = 0.95) { return new Promise((r) => canvas.toBlob(r, type, q)); }
+export function canvasBlob(type = 'image/jpeg', q = 0.95, c = canvas) { return new Promise((r) => c.toBlob(r, type, q)); }
 
 async function savePhoto() {
   busy(true, 'Rendering full resolution…');
   await new Promise((r) => setTimeout(r, 30));
   try {
     const out = await renderFullPhoto();
-    const fmt = state.exportFormat || 'image/jpeg';
-    const blob = await canvasBlob(fmt, 0.95);
+    const fmt = (hooks.exportFormat && hooks.exportFormat()) || 'image/jpeg';
+    const blob = await canvasBlob(fmt, 0.95, out.canvas);
     if (!blob) throw new Error('Image is too large for this phone. Try Original size.');
     busy(true, 'Saving to gallery…');
     const name = `PortraitStudio_${stamp()}.${fmt === 'image/png' ? 'png' : 'jpg'}`;
@@ -325,7 +330,7 @@ function videoExportSheet() {
   stopVideo();
   const info = state.videoInfo;
   const dur = info ? info.duration : video.duration;
-  const opts = state.videoOpts || (state.videoOpts = { res: '720', mask: 'fast', slowmo: '1' });
+  const opts = state.videoOpts || (state.videoOpts = { res: '720', mask: 'balanced', slowmo: '1' });
   openSheet(`<h2>Export video</h2>
     <div class="hint">${info ? `${info.width}×${info.height} · ${Math.round(info.fps)} fps · ${fmtTime(dur)}` : ''}</div>
     <div id="vxOpts"></div>
@@ -334,7 +339,7 @@ function videoExportSheet() {
     <div class="btnrow" style="margin-top:14px"><button class="btn primary" id="vxGo">Export MP4</button><button class="btn" id="vxClose">Close</button></div>`);
   const o = $('vxOpts');
   segmented(o, [['720', '720p (fast)'], ['1080', '1080p'], ['0', 'Original']], () => opts.res, (v) => (opts.res = v));
-  segmented(o, [['fast', 'Fast mask'], ['quality', 'Best mask (slow)']], () => opts.mask, (v) => (opts.mask = v));
+  segmented(o, [['fast', 'Fast mask'], ['balanced', 'Balanced'], ['quality', 'Best (slow)']], () => opts.mask, (v) => (opts.mask = v));
   segmented(o, [['1', 'Normal speed'], ['2', 'Slow-mo 2×'], ['4', 'Slow-mo 4×']], () => opts.slowmo, (v) => (opts.slowmo = v));
   if (hooks.videoExportOptions) hooks.videoExportOptions(o, opts);
   hint(o, 'Keep the app open while exporting. Original sound is kept (normal speed).');
@@ -352,8 +357,8 @@ async function runVideoExport(opts) {
     const r = await exportVideo({
       file: state.file, params: JSON.parse(JSON.stringify(state.params)), pipeline: pipe,
       shortSide: +opts.res, maskKind: opts.mask, slowmo: +opts.slowmo, signal: ac.signal,
-      quality: opts.res === '720' ? 'low' : 'mid', maskEvery: opts.mask === 'fast' ? 1 : 1,
-      paramsAt: opts.paramsAt, frameHook: opts.frameHook,
+      quality: opts.res === '720' ? 'low' : 'mid',
+      paramsAt: opts.paramsAt, frameHook: opts.frameHook, renderOpts: opts.renderOpts, stabilize: opts.stabilize,
       onProgress: (p) => { $('vxBar').style.width = (100 * p.done / p.total).toFixed(1) + '%'; $('vxStat').textContent = `Frame ${p.done}/${p.total} · ${p.fps.toFixed(1)} fps`; $('vxEta').textContent = 'ETA ' + formatEta(p.eta); },
     });
     $('vxStat').textContent = 'Saving to gallery…';

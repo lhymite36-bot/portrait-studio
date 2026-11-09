@@ -67,7 +67,7 @@ export async function addMedia(file, where = 'clip') {
 }
 
 // ---------- timeline ----------
-function refresh() {
+function refresh(withProps = true) {
   if (!root) return;
   const layout = layoutClips(P.clips); const dur = projectDuration(P);
   $('stDur').textContent = fmt(dur, false) + (P.clips.length ? ` · ${P.clips.length} clip${P.clips.length > 1 ? 's' : ''}` : '');
@@ -84,7 +84,7 @@ function refresh() {
   inner.innerHTML = h;
   inner.querySelectorAll('.blk').forEach(bindBlock);
   const cv = $('stPreview'); const o = E.outputSize(P, 360); if (cv.width !== o.width || cv.height !== o.height) { cv.width = o.width; cv.height = o.height; }
-  tl.scrollLeft = T * PX; placeHead(); renderProps(); schedule();
+  tl.scrollLeft = T * PX; placeHead(); if (withProps) renderProps(); schedule();
 }
 function placeHead() { const tl = $('stTimeline'); $('stPlayhead').style.left = (tl.scrollLeft + tl.clientWidth / 2) + 'px'; $('stTime').textContent = fmt(T, true); }
 function setTime(t) { T = Math.max(0, t); $('stTimeline').scrollLeft = T * PX; placeHead(); schedule(); }
@@ -128,7 +128,7 @@ function bindBlock(el) {
     el.addEventListener('pointermove', mv); el.addEventListener('pointerup', up);
   });
 }
-let rs = 0; function refreshSoon() { if (!rs) rs = requestAnimationFrame(() => { rs = 0; refresh(); }); }
+let rs = 0; function refreshSoon() { if (!rs) rs = requestAnimationFrame(() => { rs = 0; refresh(false); }); }
 
 // ---------- preview ----------
 const S = getState(); const pipe = getPipe();
@@ -209,7 +209,7 @@ function musicSheet() {
   $('sheetCard').querySelectorAll('[data-m]').forEach((b) => b.onclick = async () => {
     closeSheet();
     if (b.dataset.m === 'file') { pick('audio/*', false, (fs) => addMedia(fs[0])); return; }
-    toast('Making music…'); const dur = Math.max(15, Math.min(180, projectDuration(P) || 30));
+    toast('Making music…'); const dur = Math.min(600, layoutClips(P.clips).duration || 30);
     const buf = await E.makeMusic(b.dataset.m, dur); const m = E.MUSIC.find((x) => x.id === b.dataset.m);
     const s = E.addGeneratedSource(m.name, buf); P.audios.push({ id: nid(), srcId: s.id, start: 0, dur, in: 0, volume: 0.6, name: m.name, fade: true, bpm: m.bpm }); audioDirty = true; refresh();
   });
@@ -276,7 +276,7 @@ const TEMPLATES = [
   { id: 'neon', name: 'Neon Night', desc: 'Neon grade, glow outline, synthwave', run: async () => { setLook('cyber'); P.clips.forEach((c) => (c.glow = '#ff4fd8')); await ensureMusic('synth'); } },
 ];
 function setLook(id) { P.useLook = id !== 'none'; S.params.look.id = id; S.params.look.intensity = 1; S.params.portrait.enabled = false; }
-async function ensureMusic(id, vol = 0.6) { if (P.audios.some((a) => a.bpm)) return; const dur = Math.max(15, projectDuration(P)); const buf = await E.makeMusic(id, dur); const m = E.MUSIC.find((x) => x.id === id); const s = E.addGeneratedSource(m.name, buf); P.audios.push({ id: nid(), srcId: s.id, start: 0, dur, in: 0, volume: vol, name: m.name, fade: true, bpm: m.bpm }); }
+async function ensureMusic(id, vol = 0.6) { if (P.audios.some((a) => a.bpm)) return; const dur = layoutClips(P.clips).duration || 30; const buf = await E.makeMusic(id, dur); const m = E.MUSIC.find((x) => x.id === id); const s = E.addGeneratedSource(m.name, buf); P.audios.push({ id: nid(), srcId: s.id, start: 0, dur, in: 0, volume: vol, name: m.name, fade: true, bpm: m.bpm }); }
 async function addSfxAt(id, t) { const buf = await E.makeSfx(id); const s = E.addGeneratedSource(id, buf); P.audios.push({ id: nid(), srcId: s.id, start: t, dur: buf.duration, in: 0, volume: 0.8, name: id }); }
 function templatesSheet() {
   if (!P.clips.length) { toast('Add your clips first, then pick a template'); return; }

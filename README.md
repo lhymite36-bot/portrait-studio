@@ -16,6 +16,9 @@ Everything runs on the phone: no accounts, no paid APIs, no watermark.
 ## Premium tools (v1.1.0)
 Backdrop remove/swap (transparent PNG, studio, colour, photo), sky replacement, skin/eyes/teeth retouch and tap-to-heal, movable relight, object eraser, old-photo restore + colourise, text and stickers, light leaks and film dust, .cube LUT import/export, My looks, batch editing, video stabilise and focus shift. See docs/release-notes/v1.1.0.md.
 
+## Video Studio (v1.2.0)
+CapCut-style timeline: multi-track editing (trim/split/merge/reorder), transitions, keyframes, speed curves, freeze/reverse, Whisper auto captions, text animations, CC0 music/SFX, beat sync, voice effects, noise reduction, Android TTS, chroma key, PiP with blend modes and shape masks, face zoom, glow outline, auto reframe 16:9→9:16, templates, export up to 4K/60 with file-size control. See docs/release-notes/v1.2.0.md.
+
 ## Build
 ```
 npm ci && npm test && npm run sync
@@ -27,3 +30,5 @@ GitHub Actions builds the APK on every push and publishes a release for `v*` tag
 - `npm test`: unit tests for the colour pipeline, mask shaping, sizing and codec selection.
 - `python tests/headless/run.py`: real MediaPipe segmentation + WebGL + WebCodecs export in headless Chrome, GPU/CPU grading parity.
 - `python tests/headless/ui.py`: UI smoke test at a phone-sized viewport.
+- `python tests/headless/premium.py`: drives every v1.1 tool.
+- `python tests/headless/studio.py`: drives the Video Studio (captions, PiP + chroma, templates, beat sync, freeze/reverse, exports).

@@ -379,4 +379,4 @@ async function runVideoExport(opts) {
 // ---------- boot ----------
 renderTabs(); renderPanel();
 if (navigator.serviceWorker && location.protocol === 'https:' && !globalThis.Capacitor) { /* no SW: keep it simple */ }
-import('./premium.js').catch((e) => console.warn('premium tools not loaded', e));
+import('./premium.js').then(() => import('./studio-ui.js')).catch((e) => console.warn('extra tools not loaded', e));

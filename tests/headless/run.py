@@ -45,7 +45,7 @@ with sync_playwright() as p:
             report['photos'].append({'out': f'{src}-{tag}.jpg', 'w': r['w'], 'h': r['h'], 'segMs': round(r['tSeg']), 'renderMs': round(r['tRender'])})
     if only in ('all', 'video'):
         report['video'] = []
-        for fx, kw in [(f, k) for f, k in [('clip.mp4', {}), ('clip-fast.mp4', {'look': 'vibrant'}), ('clip-rot.mp4', {}), ('clip.mp4', {'slowmo': 2}), ('shaky.mp4', {}), ('shaky.mp4', {'stabilize': 1}), ('clip.mp4', {'focusShift': 1})] if os.environ.get('PS_VIDEO_ONLY', f) == f]:
+        for fx, kw in [(f, k) for f, k in [('clip.mp4', {}), ('clip-fast.mp4', {'look': 'vibrant'}), ('clip-rot.mp4', {}), ('clip.mp4', {'slowmo': 2}), ('shaky.mp4', {}), ('shaky.mp4', {'stabilize': 1}), ('clip.mp4', {'focusShift': 1})] if f in os.environ.get('PS_VIDEO_ONLY', f).split(',')]:
             url = f'http://127.0.0.1:8765{ROOT}/tests/fixtures/{fx}'
             r = pg.evaluate('([u,o]) => T.video(u,o)', [url, kw])
             name = f"video-{fx.replace('.mp4','')}{'-slowmo2x' if kw.get('slowmo') else ''}{'-stabilised' if kw.get('stabilize') else ''}{'-focusshift' if kw.get('focusShift') else ''}-out.mp4"
@@ -54,6 +54,7 @@ with sync_playwright() as p:
             r['ffprobe'] = probe; r['out'] = name
             report['video'].append(r)
         report['cancel'] = pg.evaluate(f"T.cancelTest('http://127.0.0.1:8765{ROOT}/tests/fixtures/clip.mp4')")
+    report['segdiag'] = pg.evaluate('window.PS_SEG_DIAG || null')
     report['console'] = [l for l in logs if 'PAGEERROR' in l or 'rror' in l][:20]
     b.close()
 print(json.dumps(report, indent=1))

@@ -233,6 +233,10 @@ export async function exportVideo(opts) {
         }
       }
       const fts = f.timestamp - tsBase;
+      if (opts.beforeRender) {
+        let drawn = !!seg && (done % (opts.maskEvery || (opts.maskKind === 'balanced' ? 3 : 1)) === 0);
+        await opts.beforeRender(() => { if (!drawn) { drawUpright(segCtx, f, d.width, d.height, d.rotation); drawn = true; } return segCanvas; }, fts / 1e6, done);
+      }
       f.close();
       const params = opts.paramsAt ? opts.paramsAt(fts / 1e6) : opts.params;
       pipe.render(params, width, height, Object.assign({ quality: opts.quality || 'low', seed: done % 64 }, opts.renderOpts || {}));

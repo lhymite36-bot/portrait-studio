@@ -415,6 +415,16 @@ hooks.beforeExport.push((opts) => {
     const c = document.createElement('canvas'); const o2 = JSON.parse(JSON.stringify(ov()));
     opts.frameHook = (p, t, w, h) => { if (c.width !== w || c.height !== h) { c.width = w; c.height = h; } const x = c.getContext('2d'); x.drawImage(p.canvas, 0, 0); drawOverlays(x, w, h, o2, t); return c; };
   } else opts.frameHook = null;
+  // Face-tracking retouch: re-detect faces through the video so eye/teeth touch-ups follow them.
+  const rt = fx().retouch;
+  if (rt.eyes > 0 || rt.teeth > 0) {
+    let fails = 0;
+    opts.beforeRender = async (getFrame, t, i) => {
+      if (i % 3 !== 0 || fails > 3) return;
+      try { const c = getFrame(); const faces = await faceFeatures(c); stage.upload('feat', featureCanvas(faces, c.width, c.height)); stage.featReady = faces.length > 0; }
+      catch (e) { fails++; console.warn('face tracking', e); }
+    };
+  } else opts.beforeRender = null;
 });
 
 renderPanel();

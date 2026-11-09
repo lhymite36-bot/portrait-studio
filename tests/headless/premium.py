@@ -97,6 +97,12 @@ with sync_playwright() as p:
         shot('ui-video-premium-export.png')
         with pg.expect_download(timeout=300000) as dl: pg.click('#vxGo')
         dl.value.save_as(f'{OUT}/shaky-stabilised-focusshift-text.mp4'); report['video_stat'] = pg.inner_text('#vxStat')
+    if want('vretouch'):
+        pg.set_input_files('#fileVideo', f'{FX}/clip.mp4'); pg.wait_for_timeout(4000)
+        pg.evaluate("Object.assign(PS_PREMIUM.fx().retouch, {smooth:0.6, eyes:0.8, teeth:0.6}); PS_PREMIUM.ov().items=[]")
+        pg.click('#btnSave'); pg.wait_for_timeout(400); pg.click('.seg button[data-v="0"]'); pg.click('.seg button[data-v="off"]')
+        with pg.expect_download(timeout=600000) as dl: pg.click('#vxGo')
+        dl.value.save_as(f'{OUT}/video-face-tracking-retouch.mp4'); report['vretouch_stat'] = pg.inner_text('#vxStat'); report['vretouch_feat'] = pg.evaluate('PS_PREMIUM.stage.featReady')
     b.close()
 report['errors'] = errors[:20]
 print(json.dumps(report, indent=1))

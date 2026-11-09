@@ -358,7 +358,7 @@ async function runVideoExport(opts) {
       file: state.file, params: JSON.parse(JSON.stringify(state.params)), pipeline: pipe,
       shortSide: +opts.res, maskKind: opts.mask, slowmo: +opts.slowmo, signal: ac.signal,
       quality: opts.res === '720' ? 'low' : 'mid',
-      paramsAt: opts.paramsAt, frameHook: opts.frameHook, renderOpts: opts.renderOpts, stabilize: opts.stabilize,
+      paramsAt: opts.paramsAt, frameHook: opts.frameHook, beforeRender: opts.beforeRender, renderOpts: opts.renderOpts, stabilize: opts.stabilize,
       onProgress: (p) => { $('vxBar').style.width = (100 * p.done / p.total).toFixed(1) + '%'; $('vxStat').textContent = `Frame ${p.done}/${p.total} · ${p.fps.toFixed(1)} fps`; $('vxEta').textContent = 'ETA ' + formatEta(p.eta); },
     });
     $('vxStat').textContent = 'Saving to gallery…';
